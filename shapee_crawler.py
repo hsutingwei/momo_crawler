@@ -235,7 +235,7 @@ for i in tqdm(range(len(getData))):
                 data2[1].append(getData.iloc[i]['商品名稱'])
                 data2[2].append(getData.iloc[i]['商品連結'])
                 data2[3].append(getData.iloc[i]['價格'])
-                data2[4].append(obj["comment"].replace(',', '，')) #留言
+                data2[4].append(obj["comment"].replace(',', '，').replace(r',|\r\n|\r|\n', '，')) #留言
                 data2[5].append(obj["commentId"].replace(',', '，')) #留言ID
                 data2[6].append(obj["customName"].replace(',', '，')) #留言者名稱
                 data2[7].append(obj["date"]) #留言時間
