@@ -204,7 +204,7 @@ for i in tqdm(range(len(getData))):
         data.append(True)# 資料已完整爬取
 
         getData.iloc[i] = data #塞入所有資料
-        getData.to_csv(keyword +'_商品資料.csv', encoding = ecode, index=False)
+        getData.to_csv('crawler/' + keyword +'_商品資料.csv', encoding = ecode, index=False)
 
         for obj in itemDetail:
             data2[0].append(int(getData.iloc[i]['商品ID']))
@@ -279,7 +279,7 @@ dic = {
     'videoThumbnailImg': data2[16],
     'videoUrl': data2[17],
 }
-pd.DataFrame(dic).to_csv(keyword +'_商品留言資料.csv', encoding = ecode, index=False)
+pd.DataFrame(dic).to_csv('crawler/' + keyword +'_商品留言資料.csv', encoding = ecode, index=False)
 
 tEnd = time.time()#計時結束
 totalTime = int(tEnd - tStart)
