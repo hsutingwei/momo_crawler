@@ -41,8 +41,9 @@ with open(dirPath, 'r', encoding=ecode) as f:
 # 只取留言斷詞
 for line in lineArr:
     tmp_data = line.split(',')
-    # 將二維陣列轉成一維陣列
-    flattened = [item[0] for item in do_CKIP_WS(tmp_data[4])]
+    tmp_segArr = do_CKIP_WS(tmp_data[4])
+    # 將多維陣列轉成一維陣列
+    flattened = [i for item in tmp_segArr for i in item]
     finalArr.append('，'.join(flattened))
 
 with open(outPath, 'w', encoding=ecode) as f:
