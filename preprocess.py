@@ -12,15 +12,44 @@ lineArr = [] # 暫存所有留言爬蟲的陣列
 textObj = {} # 將所有留言根據留言ID去重複
 finalArr = [] # 預處理最終結果
 
+# 因爬蟲時沒有正確將價格的千分位符號處理好，導致千分位符號與 csv 衝突，故此 function 專門處理這個問題
+# 處理好後將處理完的單行陣列回傳
+def do_money_special(lineArr):
+    start_index = 3
+    result = lineArr[start_index].replace('"', '')
+    haveError = False
+
+    # 從 start_index + 1 開始檢查後續的索引值
+    end_index = start_index + 1
+    for i in range(start_index + 1, len(lineArr)):
+        # 判斷該值是否為數字，且值為3位數 (千分位)
+        if lineArr[i].replace('"', '').isdigit() and len(lineArr[i].replace('"', '')) == 3:
+            result += lineArr[i].replace('"', '')
+            haveError = True
+        else:
+            end_index = i # 紀錄非數字部分的索引
+            break  # 遇到非數字則停止
+
+    # 將累加的結果轉回整數並替換到原陣列
+    lineArr[start_index] = result
+
+    # 刪除中間的數字部分
+    del lineArr[start_index + 1:end_index]
+        
+    return lineArr
+
 for f in os.listdir(dirPath):
     if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f:
         with open(dirPath + "/" + f, 'r', encoding=ecode) as f:
             tmp_data = f.read()
             lineArr = tmp_data.split('\n')
 
+### 只將商品名稱以及留言做簡/繁轉換
+### 並根據留言ID去重複
 for line in lineArr:
     if line is not '':
         text = line.split(',')
+        text = do_money_special(text)
         tmp_id = text[5]
         if tmp_id not in textObj:
             text[1] = cc.convert(text[1])
