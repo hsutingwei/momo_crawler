@@ -13,7 +13,7 @@ import zlib
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
-keyword = '寵物'
+keyword = '健康'
 page = 60
 ecode = 'utf-8-sig'
 
@@ -236,7 +236,7 @@ for i in tqdm(range(len(getData))):
                 data2[2].append(getData.iloc[i]['商品連結'])
                 data2[3].append(getData.iloc[i]['價格'])
                 tmp_str = obj["comment"].replace(',', '，')
-                tmp_str = re.sub(r'[\n\r]+', '，', tmp_str)
+                tmp_str = '，'.join(tmp_str.splitlines())
                 tmp_str = re.sub(r'[，]+', '，', tmp_str)
                 data2[4].append(tmp_str) #留言
                 data2[5].append(obj["commentId"].replace(',', '，')) #留言ID
