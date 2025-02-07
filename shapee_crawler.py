@@ -13,7 +13,7 @@ import zlib
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
-keyword = '耳機'
+keyword = '寵物'
 page = 60
 ecode = 'utf-8-sig'
 
@@ -235,7 +235,10 @@ for i in tqdm(range(len(getData))):
                 data2[1].append(getData.iloc[i]['商品名稱'])
                 data2[2].append(getData.iloc[i]['商品連結'])
                 data2[3].append(getData.iloc[i]['價格'])
-                data2[4].append(obj["comment"].replace(',', '，').replace(r',|\r\n|\r|\n', '，')) #留言
+                tmp_str = obj["comment"].replace(',', '，')
+                tmp_str = re.sub(r'[\n\r]+', '，', tmp_str)
+                tmp_str = re.sub(r'[，]+', '，', tmp_str)
+                data2[4].append(tmp_str) #留言
                 data2[5].append(obj["commentId"].replace(',', '，')) #留言ID
                 data2[6].append(obj["customName"].replace(',', '，')) #留言者名稱
                 data2[7].append(obj["date"]) #留言時間
