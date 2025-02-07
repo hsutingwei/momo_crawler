@@ -26,12 +26,15 @@ outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\seg1.csv"
 lineArr = [] # 所有留言資料陣列
 finalArr = [] # 斷詞最終結果陣列
 
-# 對文章進行斷詞
 def do_CKIP_WS(article):
+    """
+    對文章進行斷詞
+
+    :param str article: 欲斷詞的字串
+    :return string[][]: 斷詞後的結果(多維陣列)
+    """
     ws_results = ws_driver([str(article)])
     return ws_results
-
-print(do_CKIP_WS('品質很好值得購買商品也符合期待'))
 
 with open(dirPath, 'r', encoding=ecode) as f:
     tmp_data = f.read()
