@@ -1,5 +1,6 @@
 import os
 from opencc import OpenCC
+import re
 
 ### 此處理主要將商品名稱以及留言繁簡轉換
 ### 並根據留言ID去重複
@@ -12,9 +13,13 @@ lineArr = [] # 暫存所有留言爬蟲的陣列
 textObj = {} # 將所有留言根據留言ID去重複
 finalArr = [] # 預處理最終結果
 
-# 因爬蟲時沒有正確將價格的千分位符號處理好，導致千分位符號與 csv 衝突，故此 function 專門處理這個問題
-# 處理好後將處理完的單行陣列回傳
 def do_money_special(lineArr):
+    """
+    因爬蟲時沒有正確將價格的千分位符號處理好，導致千分位符號與 csv 衝突，故此 function 專門處理這個問題
+
+    :param list lineArr: 單行的數據陣列
+    :return list: 處理好後將處理完的單行陣列回傳
+    """
     start_index = 3
     result = lineArr[start_index].replace('"', '')
     haveError = False
@@ -38,6 +43,32 @@ def do_money_special(lineArr):
         
     return lineArr
 
+def do_CKIP_WS(article):
+    """
+    對文章進行斷詞
+
+    :param str article: 欲斷詞的字串
+    :return string[][]: 斷詞後的結果(多維陣列)
+    """
+    ws_results = ws_driver([str(article)])
+    return ws_results
+
+def do_replace_to_Chinese(str, seg_char = '，'):
+    """
+    去除非中文符號，把非中文替還成 '，'
+
+    :param str str: 來源字串
+    :param str str: 替換符號
+    :return str: 替換後結果
+    """
+    str = re.sub(r'[^\u3400-\u9fcc\uf900-\ufa2d\u3041-\u3129\uff66-\uff9f]+', '，', str)
+    str = re.sub(r'[[]-?() \f\n\r\t\v:ο\';×~+&!"_#`『』˙>\/%<β=÷*€ˊιμ$ˇ°χˋˍλ}¯@| {επδθ±§ ^αγ  ·,.:：﹕;；<>《》︽︾＜＞「」［］　『』【】〔〕︹︺︻︼﹁﹂﹃﹄［］﹝﹞＼／﹨∕？﹖、‘’′｜∣∥↖↘↗↙︱︳︴↑↓－¯〈〉?[{]}\|!`~@#$%^&*()-=_+┬┴├─┼┤┌┐╞═╪╡│▕└┘╭╮╰╯╔╦╗╠═╬╣╓╥╖╒╤╕║╚╩╝╟╫╢╙╨╜╞╪╡╘╧╛＿ˍ▁▂▃▄▅▆▇█▏▎▍▌▋▊▉◢', '，', str)
+    str = re.sub(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪❶❷❸❹❺❻❼❽❾❿⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩㊀㊁㊂㊃㊄㊅㊆㊇㊈㊉１２３４５６７８９０ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ⒜⒝⒞⒟⒠⒡⒢⒣⒤⒥⒦⒧⒨⒩⒪⒫⒬⒭⒮⒯⒰⒱⒲⒳⒴⒵￥￡€￠¥〔〕【】﹝﹞〈〉﹙﹚《》（）｛｝﹛﹜︵︶︷︸︹︺︻︼︽︾︿﹀＜＞∩∪≒≌∵∴×／﹣±≦≧﹤﹥≠≡¼½¾³²∞√㏒∷°÷ˇ㏑∫∮∠∟⊿＋﹢⊥╳⊾℅㎎㎏㎜㎝㎞㎡㏄㏎㏕℃℉‰˙ˊˇˋ', '，', str)
+    str = re.sub(r'[ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ]+', '，', str)
+    str = re.sub(r'[，]+', '，', str)
+
+    return str
+
 for f in os.listdir(dirPath):
     if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f:
         with open(dirPath + "/" + f, 'r', encoding=ecode) as f:
@@ -52,8 +83,9 @@ for line in lineArr:
         text = do_money_special(text)
         tmp_id = text[5]
         if tmp_id not in textObj:
-            text[1] = cc.convert(text[1])
-            text[4] = cc.convert(text[4])
+            text[1] = cc.convert(text[1]) # 斷詞
+            text[4] = cc.convert(text[4]) # 斷詞
+            text[4] = do_replace_to_Chinese(text[4]) # 去除非中文
             finalArr.append(','.join(text))
 
 
