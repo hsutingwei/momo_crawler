@@ -13,7 +13,7 @@ import zlib
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
-keyword = '健康'
+keyword = '書'
 page = 60
 ecode = 'utf-8-sig'
 

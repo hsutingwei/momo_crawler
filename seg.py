@@ -31,7 +31,7 @@ def do_CKIP_WS(article):
     對文章進行斷詞
 
     :param str article: 欲斷詞的字串
-    :return string[][]: 斷詞後的結果(多維陣列)
+    :return string[][]: 斷詞後的結果(二維陣列)
     """
     ws_results = ws_driver([str(article)])
     return ws_results
@@ -44,7 +44,7 @@ with open(dirPath, 'r', encoding=ecode) as f:
 # 只取留言斷詞
 for line in lineArr:
     tmp_data = line.split(',')
-    tmp_segArr = do_CKIP_WS(tmp_data[4])
+    tmp_segArr = [] if tmp_data[4] == '' else do_CKIP_WS(tmp_data[4])
     # 將多維陣列轉成一維陣列
     flattened = [i for item in tmp_segArr for i in item]
     finalArr.append('，'.join(flattened))

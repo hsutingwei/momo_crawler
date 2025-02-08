@@ -43,16 +43,6 @@ def do_money_special(lineArr):
         
     return lineArr
 
-def do_CKIP_WS(article):
-    """
-    對文章進行斷詞
-
-    :param str article: 欲斷詞的字串
-    :return string[][]: 斷詞後的結果(多維陣列)
-    """
-    ws_results = ws_driver([str(article)])
-    return ws_results
-
 def do_replace_to_Chinese(str, seg_char = '，'):
     """
     去除非中文符號，把非中文替還成 '，'
