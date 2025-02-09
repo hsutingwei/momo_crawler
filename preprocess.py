@@ -7,8 +7,9 @@ import re
 
 ecode = 'utf-8-sig'
 cc = OpenCC('s2tw')
+key = 'chanel香水'
 dirPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\crawler"
-outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre1.csv"
+outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre_" + key + ".csv"
 lineArr = [] # 暫存所有留言爬蟲的陣列
 textObj = {} # 將所有留言根據留言ID去重複
 finalArr = [] # 預處理最終結果
@@ -66,7 +67,7 @@ def do_replace_to_Chinese(str, seg_char = ';'):
     return str
 
 for f in os.listdir(dirPath):
-    if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f:
+    if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f and (key == '' or key in f):
         with open(dirPath + "/" + f, 'r', encoding=ecode) as f:
             tmp_data = f.read()
             lineArr = tmp_data.split('\n')

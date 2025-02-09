@@ -21,10 +21,11 @@ pos_driver = CkipPosTagger(model="bert-base", device=0)
 #print("Initializing drivers ... all done")
 
 ecode = 'utf-8-sig'
-dirPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre1.csv"
-outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\seg1.csv"
-posPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\pos1.csv"
-finPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\fin1.csv"
+key = 'chanel香水'
+dirPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre_" + key + ".csv"
+outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\seg_" + key + ".csv"
+posPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\pos_" + key + ".csv"
+finPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\fin_" + key + ".csv"
 lineArr = [] # 所有留言資料陣列
 segArr = [] # 斷詞最終結果陣列
 posArr = [] # 詞性結果陣列
