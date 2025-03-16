@@ -17,12 +17,6 @@ keyword = '書'
 page = 60
 ecode = 'utf-8-sig'
 
-# 2022/11/21 由於蝦皮API更新，商品細節資料無法再單純使用request爬取，因此header只留給爬留言使用，而流言的API沒什麼檢查
-my_headers = {
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
-    'if-none-match-': '55b03-6d83b58414a54cb5ffbe81099940f836'
-    }     
-
 def extract_number(input_string):
     """
     從字串中提取數字，支持千分位符號，並將結果轉換為 int 型別。
@@ -153,7 +147,7 @@ if (True):
 
         time.sleep(random.randint(20,30)) # 休息久一點
 
-    # 2023/04/20 先將每頁抓到的商品儲存下來，方便後續追蹤並爬蟲
+    # 先將每頁抓到的商品儲存下來，方便後續追蹤並爬蟲
     dic = {
         '商品ID':itemid,
         #'賣家ID':shopid,
@@ -176,12 +170,12 @@ if (True):
 print('---------- 開始進行留言爬蟲 ----------')
 tStart = time.time()#計時開始
 
-# 2023/04/20 先取得之前爬下來的紀錄
+# 先取得之前爬下來的紀錄
 getData = pd.read_csv(keyword +'_商品資料.csv')
 data2 = [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []]
 for i in tqdm(range(len(getData))):
     data = []
-    # 2023/04/20 備標註已經抓過的，就不用再抓了，這樣就算之前爬到一半被中斷，也不會努力付諸東流
+    # 備標註已經抓過的，就不用再抓了，這樣就算之前爬到一半被中斷，也不會努力付諸東流
     if getData.iloc[i]['資料已完整爬取']==True:
         continue
     data.append(int(getData.iloc[i]['商品ID']))
@@ -189,7 +183,6 @@ for i in tqdm(range(len(getData))):
     data.append(getData.iloc[i]['商品連結'])
     data.append(getData.iloc[i]['價格'])
     #請求商品詳細資料
-    #itemDetail = goods_detail(url = data[2], item_id = data[0])
     tmpDetail = get_goods_comments(int(data[0]))
     if (tmpDetail.get("goodsCommentList") is not None):
         itemDetail = tmpDetail.get("goodsCommentList")
@@ -226,6 +219,7 @@ for i in tqdm(range(len(getData))):
             data2[16].append(obj["videoThumbnailImg"]) #videoThumbnailImg
             data2[17].append(obj["videoUrl"]) #videoUrl
 
+        # 如果留言有分頁，取得第2頁之後的留言數據
         for j in range(2, loopCount + 1):
             tmpDetail = get_goods_comments(int(data[0]), cur_page=j)
             itemDetail = tmpDetail.get("goodsCommentList")
