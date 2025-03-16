@@ -1,6 +1,7 @@
 import os
 from opencc import OpenCC
 import re
+import unicodedata
 
 ### 此處理主要將商品名稱以及留言繁簡轉換
 ### 並根據留言ID去重複
@@ -67,6 +68,12 @@ def do_replace_to_Chinese(str, seg_char = ';'):
 
     return str
 
+def full2half(str: str) -> str:
+    """
+    全形轉半形
+    """
+    return unicodedata.normalize("NFKC", str)
+
 for f in os.listdir(dirPath):
     if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f and (key == '' or key in f):
         with open(dirPath + "/" + f, 'r', encoding=ecode) as f:
@@ -76,11 +83,13 @@ for f in os.listdir(dirPath):
 ### 只將商品名稱以及留言做簡/繁轉換
 ### 並根據留言ID去重複
 for line in lineArr:
-    if line is not '':
+    if line != '':
         text = line.split(',')
         text = do_money_special(text)
         tmp_id = text[5]
         if tmp_id not in textObj:
+            text[1] = full2half(text[1]) # 全形轉半形
+            text[4] = full2half(text[4]) # 全形轉半形
             text[1] = cc.convert(text[1]) # 簡繁轉換
             text[4] = cc.convert(text[4]) # 簡繁轉換
             text[4] = do_replace_to_Chinese(text[4]) # 去除非中文
