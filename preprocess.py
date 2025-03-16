@@ -46,7 +46,8 @@ def do_money_special(lineArr):
 
 def do_replace_to_Chinese(str, seg_char = ';'):
     """
-    去除非中文符號，把非中文替還成 ';'
+    去除非中文符號，把非中文替還成 ';'。
+    此動作可保留所有漢字符號，除了繁體字，簡體字、再簡字、三簡字等，亞洲國家的漢字也會保留，例如日文漢字等國家的漢字都會保留
 
     :param str str: 來源字串
     :param str str: 替換符號
