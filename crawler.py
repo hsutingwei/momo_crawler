@@ -12,6 +12,8 @@ import random
 import zlib
 from tqdm import tqdm
 from bs4 import BeautifulSoup
+import os
+from datetime import datetime
 
 keyword = '益生菌'
 page = 60
@@ -105,7 +107,7 @@ name = []
 link = []
 price = []
 sales = []
-if (True):
+if (False):
     for i in tqdm(range(int(page))):
     #for i in tqdm(range(1)):
         driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
@@ -170,102 +172,93 @@ if (True):
 
 
 #---------- Part 2. 補上商品的詳細資料，由於多設了爬取的標記，因此爬過的就不會再爬了 ----------
-print('---------- 開始進行留言爬蟲 ----------')
-tStart = time.time()#計時開始
+print('---------- 開始進行留言爬蟲（只抓取新留言） ----------')
+tStart = time.time()
 
-# 先取得之前爬下來的紀錄
-getData = pd.read_csv(keyword +'_商品資料.csv')
-data2 = [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []]
+# 當前爬蟲時間作為檔名用
+current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
+comments_file_path = f'crawler/{keyword}_商品留言資料_{current_time_str}.csv'
+
+# 嘗試讀取過去已爬留言ID，避免重複爬取
+existing_comment_ids = set()
+all_existing_files = [f for f in os.listdir('crawler') if f.startswith(keyword + '_商品留言資料_') and f.endswith('.csv')]
+for file in all_existing_files:
+    df = pd.read_csv(os.path.join('crawler', file), encoding=ecode)
+    existing_comment_ids.update(df['留言ID'].astype(str).tolist())
+
+# 欄位容器（新增 資料擷取時間）
+data2 = [[] for _ in range(20)]  # 原本19個欄位 + 資料擷取時間
+
+getData = pd.read_csv(keyword + '_商品資料.csv', encoding=ecode)
+
 for i in tqdm(range(len(getData))):
-    data = []
-    # 備標註已經抓過的，就不用再抓了，這樣就算之前爬到一半被中斷，也不會努力付諸東流
-    if getData.iloc[i]['資料已完整爬取']==True:
+    if getData.iloc[i]['資料已完整爬取'] == True:
         continue
-    data.append(int(getData.iloc[i]['商品ID']))
-    data.append(getData.iloc[i]['商品名稱'])
-    data.append(getData.iloc[i]['商品連結'])
-    data.append(getData.iloc[i]['價格'])
-    data.append(getData.iloc[i]['銷售數量'])
-    #請求商品詳細資料
-    tmpDetail = get_goods_comments(int(data[0]))
-    if (tmpDetail is not None and tmpDetail.get("goodsCommentList") is not None):
-        itemDetail = tmpDetail.get("goodsCommentList")
-        responseCount = int(tmpDetail.get("filterList")[0]['count']) # 共有幾筆留言
-        loopCount = responseCount // 10 + (1 if responseCount % 10 > 0 else 0) # 根據留言數，判斷需要call 幾次 web API
 
-        # 抓不到資料就先跳過
-        if itemDetail is None:
-            print('抓不到商品詳細資料...\n')
+    product_id = int(getData.iloc[i]['商品ID'])
+    basic_info = [
+        product_id,
+        getData.iloc[i]['商品名稱'],
+        getData.iloc[i]['商品連結'],
+        getData.iloc[i]['價格'],
+        getData.iloc[i]['銷售數量']
+    ]
+
+    tmpDetail = get_goods_comments(product_id)
+    if tmpDetail is None or tmpDetail.get("goodsCommentList") is None:
+        continue
+
+    all_pages = tmpDetail.get("filterList")[0]['count']
+    loopCount = all_pages // 10 + (1 if all_pages % 10 > 0 else 0)
+
+    for page in range(1, loopCount + 1):
+        if page > 1:
+            tmpDetail = get_goods_comments(product_id, cur_page=page)
+            if tmpDetail is None:
+                continue
+        itemDetail = tmpDetail.get("goodsCommentList")
+        if not itemDetail:
             continue
 
-        data.append(True)# 資料已完整爬取
-
-        getData.iloc[i] = data #塞入所有資料
-        getData.to_csv('crawler/' + keyword +'_商品資料.csv', encoding = ecode, index=False)
-
         for obj in itemDetail:
-            data2[0].append(int(getData.iloc[i]['商品ID']))
-            data2[1].append(getData.iloc[i]['商品名稱'])
-            data2[2].append(getData.iloc[i]['商品連結'])
-            data2[3].append(getData.iloc[i]['價格'])
-            data2[4].append(getData.iloc[i]['銷售數量'])
-            data2[5].append(obj["comment"].replace(',', '，')) #留言
-            data2[6].append(obj["commentId"].replace(',', '，')) #留言ID
-            data2[7].append(obj["customName"].replace(',', '，')) #留言者名稱
-            data2[8].append(obj["date"]) #留言時間
-            data2[9].append(obj["goodsType"].replace(',', '，')) #商品 Type
-            data2[10].append(obj["imageUrlList"]) #留言 圖
-            data2[11].append(obj["isLike"]) #isLike
-            data2[12].append(obj["isShowLike"]) #isShowLike
-            data2[13].append(obj["likeCount"]) #留言 likeCount
-            data2[14].append(obj["replyContent"].replace(',', '，')) #留言 replyContent
-            data2[15].append(obj["replyDate"]) #留言 replyDate
-            data2[16].append(obj["score"]) #留言星數
-            data2[17].append(obj["videoThumbnailImg"]) #videoThumbnailImg
-            data2[18].append(obj["videoUrl"]) #videoUrl
+            comment_id = str(obj["commentId"])
+            if comment_id in existing_comment_ids:
+                continue  # Skip duplicates
+            existing_comment_ids.add(comment_id)
 
-        # 如果留言有分頁，取得第2頁之後的留言數據
-        for j in range(2, loopCount + 1):
-            tmpDetail = get_goods_comments(int(data[0]), cur_page=j)
-            itemDetail = tmpDetail.get("goodsCommentList")
-            
-            for obj in itemDetail:
-                data2[0].append(int(getData.iloc[i]['商品ID']))
-                data2[1].append(getData.iloc[i]['商品名稱'])
-                data2[2].append(getData.iloc[i]['商品連結'])
-                data2[3].append(getData.iloc[i]['價格'])
-                data2[4].append(getData.iloc[i]['銷售數量'])
-                tmp_str = obj["comment"].replace(',', '，')
-                tmp_str = '，'.join(tmp_str.splitlines())
-                tmp_str = re.sub(r'[，]+', '，', tmp_str)
-                data2[5].append(tmp_str) #留言
-                data2[6].append(obj["commentId"].replace(',', '，')) #留言ID
-                data2[7].append(obj["customName"].replace(',', '，')) #留言者名稱
-                data2[8].append(obj["date"]) #留言時間
-                data2[9].append(obj["goodsType"].replace(',', '，')) #商品 Type
-                data2[10].append(obj["imageUrlList"]) #留言 圖
-                data2[11].append(obj["isLike"]) #isLike
-                data2[12].append(obj["isShowLike"]) #isShowLike
-                data2[13].append(obj["likeCount"]) #留言 likeCount
-                data2[14].append(obj["replyContent"].replace(',', '，')) #留言 replyContent
-                data2[15].append(obj["replyDate"]) #留言 replyDate
-                data2[16].append(obj["score"]) #留言星數
-                data2[17].append(obj["videoThumbnailImg"]) #videoThumbnailImg
-                data2[18].append(obj["videoUrl"]) #videoUrl
-            time.sleep(random.randint(2,4))
-        
-        time.sleep(random.randint(2,4)) # 休息久一點
+            tmp_str = obj["comment"].replace(',', '，')
+            tmp_str = '，'.join(tmp_str.splitlines())
+            tmp_str = re.sub(r'[，]+', '，', tmp_str)
 
-        # 每爬5個商品，會再有一次更長的休息
-        # if i%5 == 0 :
-        #     time.sleep(random.randint(3,8)) 
+            data2[0].append(basic_info[0])
+            data2[1].append(basic_info[1])
+            data2[2].append(basic_info[2])
+            data2[3].append(basic_info[3])
+            data2[4].append(basic_info[4])
+            data2[5].append(tmp_str)
+            data2[6].append(comment_id)
+            data2[7].append(obj["customName"].replace(',', '，'))
+            data2[8].append(obj["date"])
+            data2[9].append(obj["goodsType"].replace(',', '，'))
+            data2[10].append(obj["imageUrlList"])
+            data2[11].append(obj["isLike"])
+            data2[12].append(obj["isShowLike"])
+            data2[13].append(obj["likeCount"])
+            data2[14].append(obj["replyContent"].replace(',', '，'))
+            data2[15].append(obj["replyDate"])
+            data2[16].append(obj["score"])
+            data2[17].append(obj["videoThumbnailImg"])
+            data2[18].append(obj["videoUrl"])
+            data2[19].append(current_time_str)  # 資料擷取時間
 
+        time.sleep(random.randint(2, 4))
+
+# 儲存新留言資料（以新檔案儲存）
 dic = {
-    '商品ID':data2[0],
-    #'賣家ID':shopid,
-    '商品名稱':data2[1],
-    '商品連結':data2[2],
-    '價格':data2[3],
+    '商品ID': data2[0],
+    '商品名稱': data2[1],
+    '商品連結': data2[2],
+    '價格': data2[3],
     '銷售數量': data2[4],
     '留言': data2[5],
     '留言ID': data2[6],
@@ -281,13 +274,14 @@ dic = {
     '留言星數': data2[16],
     'videoThumbnailImg': data2[17],
     'videoUrl': data2[18],
+    '資料擷取時間': data2[19]
 }
-pd.DataFrame(dic).to_csv('crawler/' + keyword +'_商品留言資料.csv', encoding = ecode, index=False)
 
-tEnd = time.time()#計時結束
+pd.DataFrame(dic).to_csv(comments_file_path, encoding=ecode, index=False)
+
+# 結束計時
+tEnd = time.time()
 totalTime = int(tEnd - tStart)
 minute = totalTime // 60
 second = totalTime % 60
-print('資料儲存完成，花費時間（約）： ' + str(minute) + ' 分 ' + str(second) + '秒')
-
-driver.close() 
+print(f'新留言資料儲存完成，檔名：{comments_file_path}，耗時：約 {minute} 分 {second} 秒')
