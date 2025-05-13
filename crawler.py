@@ -19,6 +19,27 @@ keyword = '益生菌'
 page = 60
 ecode = 'utf-8-sig'
 
+def is_valid_row(line):
+    # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
+    return re.match(r'^\d+,', line.strip()) is not None
+
+def clean_broken_csv(input_path, output_path):
+    with open(input_path, 'r', encoding='utf-8-sig') as infile, open(output_path, 'w', encoding='utf-8-sig') as outfile:
+        buffer = ''
+        for line in infile:
+            line = line.rstrip('\n')
+            if is_valid_row(line):
+                # 若上一行有累積，寫入
+                if buffer:
+                    outfile.write(buffer + '\n')
+                buffer = line
+            else:
+                buffer += ' ' + line  # 合併為同一行（中間加空格避免直接黏住）
+        
+        # 最後一行補寫
+        if buffer:
+            outfile.write(buffer + '\n')
+
 def extract_number(input_string):
     """
     從字串中提取數字，支持千分位符號，並將結果轉換為 int 型別。
@@ -182,9 +203,22 @@ comments_file_path = f'crawler/{keyword}_商品留言資料_{current_time_str}.c
 # 嘗試讀取過去已爬留言ID，避免重複爬取
 existing_comment_ids = set()
 all_existing_files = [f for f in os.listdir('crawler') if f.startswith(keyword + '_商品留言資料_') and f.endswith('.csv')]
+
 for file in all_existing_files:
-    df = pd.read_csv(os.path.join('crawler', file), encoding=ecode)
-    existing_comment_ids.update(df['留言ID'].astype(str).tolist())
+    original_path = os.path.join('crawler', file)
+    fixed_path = original_path.replace('.csv', '_fixed_temp.csv')
+
+    # 修復該檔案的換行錯誤到暫存檔
+    clean_broken_csv(original_path, fixed_path)
+
+    try:
+        df = pd.read_csv(fixed_path, encoding=ecode)
+        existing_comment_ids.update(df['留言ID'].astype(str).tolist())
+    except Exception as e:
+        print(f"讀取修復後檔案 {file} 時發生錯誤: {e}")
+    
+    # 用完就刪除暫存檔
+    os.remove(fixed_path)
 
 # 欄位容器（新增 資料擷取時間）
 data2 = [[] for _ in range(20)]  # 原本19個欄位 + 資料擷取時間
@@ -208,7 +242,7 @@ for i in tqdm(range(len(getData))):
     if tmpDetail is None or tmpDetail.get("goodsCommentList") is None:
         continue
 
-    all_pages = tmpDetail.get("filterList")[0]['count']
+    all_pages = int(tmpDetail.get("filterList")[0]['count'])
     loopCount = all_pages // 10 + (1 if all_pages % 10 > 0 else 0)
 
     for page in range(1, loopCount + 1):
@@ -277,7 +311,15 @@ dic = {
     '資料擷取時間': data2[19]
 }
 
+# 儲存原始留言檔
 pd.DataFrame(dic).to_csv(comments_file_path, encoding=ecode, index=False)
+
+# 對剛儲存的留言檔案進行換行修復處理
+fixed_file_path = comments_file_path.replace('.csv', '_fixed.csv')
+clean_broken_csv(comments_file_path, fixed_file_path)
+
+# 若要用修正後版本直接覆蓋原始檔案（避免雙份），取消下面註解
+os.replace(fixed_file_path, comments_file_path)
 
 # 結束計時
 tEnd = time.time()
