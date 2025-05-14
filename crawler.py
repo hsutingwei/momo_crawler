@@ -15,9 +15,14 @@ from bs4 import BeautifulSoup
 import os
 from datetime import datetime
 
-keyword = '益生菌'
+keyword = '葉黃素'
 page = 60
 ecode = 'utf-8-sig'
+product_csv_path = f'{keyword}_商品資料.csv'
+snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
+current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
+# 是否包含第一次「舊資料」中的銷售量當成一筆快照記錄
+include_original_snapshot = True
 
 def is_valid_row(line):
     # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
@@ -99,6 +104,109 @@ def get_goods_comments(goods_code, cur_page=1, cust_no="", filter_type="total", 
     except json.JSONDecodeError:
         print("無法解析回應的 JSON 資料")
         return None
+
+def get_current_sales(driver, url):
+    try:
+        driver.get(url)
+        time.sleep(random.uniform(0.8, 1.8))
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        sales_text = soup.select_one('.productTotalSales')
+        if not sales_text:
+            return None
+        text = sales_text.text.strip()
+        count = extract_number(text)
+        if count is None:
+            return None
+        return str(count) + ('萬' if text.endswith('萬') else '')
+    except Exception as e:
+        print(f'取得 {url} 銷售數失敗：{e}')
+        return None
+
+def save_sales_snapshot_long_format():
+    if not os.path.exists(product_csv_path):
+        print(f"找不到商品資料檔案：{product_csv_path}")
+        return
+
+    df = pd.read_csv(product_csv_path, encoding=ecode)
+    all_rows = []
+
+    # ✅ 加入第一次原始資料的銷售快照
+    if include_original_snapshot:
+        for _, row in df.iterrows():
+            all_rows.append([
+                row['商品ID'],
+                row['商品名稱'],
+                row['價格'],
+                row['銷售數量'],
+                row['商品連結'],
+                current_time_str
+            ])
+        print(f'已從原始商品資料加入 {len(df)} 筆初始快照')
+
+    # ✅ 爬取當下銷售量
+    service = ChromeService(ChromeDriverManager().install())
+    options = webdriver.ChromeOptions()
+    options.add_experimental_option("prefs", {"profile.default_content_setting_values.notifications": 2})
+    driver = webdriver.Chrome(service=service, options=options)
+
+    for _, row in df.iterrows():
+        product_id = row['商品ID']
+        product_name = row['商品名稱']
+        price = row['價格']
+        link = row['商品連結']
+
+        latest_sales = get_current_sales(driver, link)
+        if latest_sales is None:
+            print(f"【警告】無法取得 {product_name} 的銷售數")
+            latest_sales = 0
+
+        all_rows.append([
+            product_id,
+            product_name,
+            price,
+            latest_sales,
+            link,
+            current_time_str
+        ])
+        time.sleep(random.uniform(1, 2.2))
+
+    driver.quit()
+
+    if not all_rows:
+        print("⚠ 無可寫入的快照資料")
+        return
+
+    # 準備新快照資料表
+    df_snapshot = pd.DataFrame(all_rows, columns=[
+        '商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間'
+    ])
+
+    os.makedirs('crawler', exist_ok=True)
+
+    # ✅ 若已有快照檔案，先讀出比對，避免重複寫入
+    if os.path.exists(snapshot_path):
+        try:
+            df_existing = pd.read_csv(snapshot_path, encoding=ecode, dtype={'商品ID': str})
+            # 轉型後進行去重（根據商品ID+擷取時間）
+            before_len = len(df_snapshot)
+            df_combined = pd.concat([df_existing, df_snapshot], ignore_index=True)
+            df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
+            new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
+
+            df_snapshot = new_records[df_snapshot.columns]
+            actual_new = len(df_snapshot)
+            if actual_new == 0:
+                print("🚫 沒有新增的快照資料，跳過寫入")
+                return
+            else:
+                print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
+                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)
+        except Exception as e:
+            print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
+    else:
+        # 第一次建立快照檔
+        df_snapshot.to_csv(snapshot_path, encoding=ecode, index=False)
+        print(f"✅ 首次建立快照檔，寫入 {len(df_snapshot)} 筆")
 
 # 自動下載ChromeDriver
 service = ChromeService(executable_path=ChromeDriverManager().install())
@@ -182,7 +290,7 @@ if (False):
         '銷售數量': sales,
         '資料已完整爬取':[ False for x in range(len(itemid)) ] ,
     }
-    pd.DataFrame(dic).to_csv(keyword +'_商品資料.csv', encoding = ecode, index=False)
+    pd.DataFrame(dic).to_csv(product_csv_path, encoding = ecode, index=False)
 
     tEnd = time.time()#計時結束
     totalTime = int(tEnd - tStart)
@@ -190,14 +298,14 @@ if (False):
     second = totalTime % 60
     print('資料儲存完成，花費時間（約）： ' + str(minute) + ' 分 ' + str(second) + '秒')
 
-
+print('---------- 開始進行銷售數量快照爬蟲 ----------')
+save_sales_snapshot_long_format()
 
 #---------- Part 2. 補上商品的詳細資料，由於多設了爬取的標記，因此爬過的就不會再爬了 ----------
 print('---------- 開始進行留言爬蟲（只抓取新留言） ----------')
 tStart = time.time()
 
 # 當前爬蟲時間作為檔名用
-current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
 comments_file_path = f'crawler/{keyword}_商品留言資料_{current_time_str}.csv'
 
 # 嘗試讀取過去已爬留言ID，避免重複爬取
@@ -223,7 +331,7 @@ for file in all_existing_files:
 # 欄位容器（新增 資料擷取時間）
 data2 = [[] for _ in range(20)]  # 原本19個欄位 + 資料擷取時間
 
-getData = pd.read_csv(keyword + '_商品資料.csv', encoding=ecode)
+getData = pd.read_csv(product_csv_path, encoding=ecode)
 
 for i in tqdm(range(len(getData))):
     if getData.iloc[i]['資料已完整爬取'] == True:
