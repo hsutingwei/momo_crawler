@@ -14,8 +14,10 @@ from tqdm import tqdm
 from bs4 import BeautifulSoup
 import os
 from datetime import datetime
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-keyword = '葉黃素'
+keyword = '維他命'
 page = 60
 ecode = 'utf-8-sig'
 product_csv_path = f'{keyword}_商品資料.csv'
@@ -105,21 +107,37 @@ def get_goods_comments(goods_code, cur_page=1, cust_no="", filter_type="total", 
         print("無法解析回應的 JSON 資料")
         return None
 
-def get_current_sales(driver, url):
+def get_current_sales(goods_code, host="momoshop"):
+    url = "https://eccapi.momoshop.com.tw/user/getGoodsComment"
+    headers = {
+        "Content-Type": "application/json",  # 設定為 JSON 格式
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    }
+    payload = {
+        "goodsCode": str(goods_code),
+        "host": host,
+    }
+
     try:
-        driver.get(url)
-        time.sleep(random.uniform(0.8, 1.8))
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        sales_text = soup.select_one('.productTotalSales')
-        if not sales_text:
-            return None
-        text = sales_text.text.strip()
-        count = extract_number(text)
+        # 發送 POST 請求
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()  # 若 HTTP 狀態碼為 4xx 或 5xx，則拋出異常
+
+        # 解析回應 JSON 資料
+        data = response.json()
+        if data is None or data.get("saleCount") is None:
+            print(f"【警告】無法取得 {goods_code} 的銷售數")
+            return 0
+        sales_text = data.get("saleCount")
+        count = extract_number(sales_text)
         if count is None:
-            return None
-        return str(count) + ('萬' if text.endswith('萬') else '')
-    except Exception as e:
-        print(f'取得 {url} 銷售數失敗：{e}')
+            return 0
+        return str(count) + ('萬' if sales_text.endswith('萬') else '')
+    except requests.RequestException as e:
+        print(f"HTTP 請求錯誤: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("無法解析回應的 JSON 資料")
         return None
 
 def save_sales_snapshot_long_format():
@@ -298,8 +316,8 @@ if (False):
     second = totalTime % 60
     print('資料儲存完成，花費時間（約）： ' + str(minute) + ' 分 ' + str(second) + '秒')
 
-print('---------- 開始進行銷售數量快照爬蟲 ----------')
-save_sales_snapshot_long_format()
+#print('---------- 開始進行銷售數量快照爬蟲 ----------')
+#save_sales_snapshot_long_format()
 
 #---------- Part 2. 補上商品的詳細資料，由於多設了爬取的標記，因此爬過的就不會再爬了 ----------
 print('---------- 開始進行留言爬蟲（只抓取新留言） ----------')
@@ -332,6 +350,20 @@ for file in all_existing_files:
 data2 = [[] for _ in range(20)]  # 原本19個欄位 + 資料擷取時間
 
 getData = pd.read_csv(product_csv_path, encoding=ecode)
+all_rows = []
+
+# ✅ 加入第一次原始資料的銷售快照
+if include_original_snapshot:
+    for _, row in getData.iterrows():
+        all_rows.append([
+            row['商品ID'],
+            row['商品名稱'],
+            row['價格'],
+            row['銷售數量'],
+            row['商品連結'],
+            current_time_str
+        ])
+    print(f'已從原始商品資料加入 {len(df)} 筆初始快照')
 
 for i in tqdm(range(len(getData))):
     if getData.iloc[i]['資料已完整爬取'] == True:
@@ -349,6 +381,23 @@ for i in tqdm(range(len(getData))):
     tmpDetail = get_goods_comments(product_id)
     if tmpDetail is None or tmpDetail.get("goodsCommentList") is None:
         continue
+
+    # 有流言才會重新爬銷售數量的快照 (不然每次都爬會很慢)
+    product_id = getData.iloc[i]['商品ID']
+    product_name = getData.iloc[i]['商品名稱']
+    price = getData.iloc[i]['價格']
+    link = getData.iloc[i]['商品連結']
+
+    latest_sales = get_current_sales(product_id)
+
+    all_rows.append([
+        product_id,
+        product_name,
+        price,
+        latest_sales,
+        link,
+        current_time_str
+    ])
 
     all_pages = int(tmpDetail.get("filterList")[0]['count'])
     loopCount = all_pages // 10 + (1 if all_pages % 10 > 0 else 0)
@@ -435,3 +484,38 @@ totalTime = int(tEnd - tStart)
 minute = totalTime // 60
 second = totalTime % 60
 print(f'新留言資料儲存完成，檔名：{comments_file_path}，耗時：約 {minute} 分 {second} 秒')
+
+
+if not all_rows:
+    print("⚠ 無可寫入的快照資料")
+else:
+    # 準備新快照資料表
+    df_snapshot = pd.DataFrame(all_rows, columns=[
+        '商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間'
+    ])
+
+    os.makedirs('crawler', exist_ok=True)
+
+    # ✅ 若已有快照檔案，先讀出比對，避免重複寫入
+    if os.path.exists(snapshot_path):
+        try:
+            df_existing = pd.read_csv(snapshot_path, encoding=ecode, dtype={'商品ID': str})
+            # 轉型後進行去重（根據商品ID+擷取時間）
+            before_len = len(df_snapshot)
+            df_combined = pd.concat([df_existing, df_snapshot], ignore_index=True)
+            df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
+            new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
+
+            df_snapshot = new_records[df_snapshot.columns]
+            actual_new = len(df_snapshot)
+            if actual_new == 0:
+                print("🚫 沒有新增的快照資料，跳過寫入")
+            else:
+                print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
+                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)
+        except Exception as e:
+            print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
+    else:
+        # 第一次建立快照檔
+        df_snapshot.to_csv(snapshot_path, encoding=ecode, index=False)
+        print(f"✅ 首次建立快照檔，寫入 {len(df_snapshot)} 筆")
