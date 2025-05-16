@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+對 preprocess 資料夾中多個 pre_<keyword>_<timestamp>.csv 檔案，執行 CKIP 斷詞、POS 標註、過濾，
+並統一輸出到 seg/<keyword>/ 資料夾：
+    seg/<keyword>/seg_<keyword>_<timestamp>.csv
+    seg/<keyword>/pos_<keyword>_<timestamp>.csv
+    seg/<keyword>/fin_<keyword>_<timestamp>.csv
+"""
+
 import os
 import re
 import numpy as np
@@ -6,10 +15,30 @@ from collections import Counter
 import matplotlib as plt
 from ckip_transformers.nlp import CkipWordSegmenter, CkipPosTagger, CkipNerChunker
 import torch
+import csv
+from tqdm import tqdm
+import argparse
 
 # Check CUDA、cuDNN version
 #print(torch.version.cuda)
 #print(torch.backends.cudnn.version())
+
+# ---------- 參數 & 路徑 ----------
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--keyword', type=str, help='關鍵字，對應 crawler 檔案名前綴')
+    return ap.parse_args()
+
+args = parse_args()
+
+# 參數
+keyword = args.keyword or '益生菌'    # 預設可改
+ROOT = r"C:\YvesProject\中央\線上評論\momo_crawler-main"
+DIR_PRE  = os.path.join(ROOT, 'preprocess')
+DIR_SEG  = os.path.join(ROOT, 'seg', keyword)
+os.makedirs(DIR_SEG, exist_ok=True)
+
+ecode = 'utf-8-sig'
 
 # Initialize drivers
 print("Initializing drivers ... WS")
@@ -20,97 +49,73 @@ pos_driver = CkipPosTagger(model="bert-base", device=0)
 #ner_driver = CkipNerChunker(model="bert-base", device=0)
 #print("Initializing drivers ... all done")
 
-ecode = 'utf-8-sig'
-key = 'chanel香水'
-dirPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre_" + key + ".csv"
-outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\seg_" + key + ".csv"
-posPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\pos_" + key + ".csv"
-finPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\seg\fin_" + key + ".csv"
-lineArr = [] # 所有留言資料陣列
-segArr = [] # 斷詞最終結果陣列
-posArr = [] # 詞性結果陣列
-clearArr = [] # 最終清理的陣列
-
-def do_CKIP_WS(article):
+def do_CKIP_WS(text):
     """
     對文章進行斷詞
 
-    :param str article: 欲斷詞的字串
+    :param str text: 欲斷詞的字串
     :return string[][]: 斷詞後的結果(二維陣列)
     """
-    ws_results = ws_driver([str(article)])
-    return ws_results
+    # ws_driver 回傳 List[List[str]]，每個子 List 是一句
+    results = ws_driver([str(text)])
+    return results[0]  # 取第一句的 token 列表
 
-def do_CKIP_POS(ws_result):
-    """
-    對詞組進行詞性標示
+def do_CKIP_POS(tokens):
+    """對詞組進行詞性標示"""
+    return pos_driver(tokens)
 
-    :param string[][] ws_result: do_CKIP_WS 的斷詞結果(二維陣列)
-    """
-    if len(ws_result) == 0:
-        return []
-    pos = pos_driver(ws_result[0])
-    all_list = []
-    for sent in pos:
-        all_list.append(sent)
-
-    return all_list
-
-def pos_filter(pos):
+def pos_filter(pos_list):
     """
     保留名詞與動詞
-    (do_CKIP_POS 回傳的詞性標示)
-
+    只保留名詞(N*)和動詞(V*)
     """
-    for i in list(set(pos)):
-        if i.startswith("N") or i.startswith("V"):
-            return "Yes"
-        else:
-            continue
+    return [p for p in pos_list if p.startswith('N') or p.startswith('V')]
 
-def cleaner(ws_results, pos_results):
-    """
-    執行資料清洗
-    """
-    word_lst = []
-    if len(ws_results) == 0 or len(pos_results) == 0:
-        return []
-    for ws, pos in zip(ws_results[0], pos_results):
-        # in_stopwords_or_not = ws not in stopwords  #詞組是否存為停用詞
-        if_len_greater_than_1 = len(ws) > 1        #詞組長度必須大於1
-        is_V_or_N = pos_filter(pos)                #詞組是否為名詞、動詞
-        if if_len_greater_than_1 and is_V_or_N == "Yes":
-            word_lst.append(str(ws))
-        else:
-            pass
-    return word_lst
+# 處理每個預處理檔
+for fname in os.listdir(DIR_PRE):
+    if not fname.startswith(f'pre_{keyword}_') or not fname.endswith('.csv'):
+        continue
+    # 取得 timestamp
+    m = re.search(rf'pre_{keyword}_(\d{{14}})\.csv', fname)
+    if not m:
+        continue
+    ts = m.group(1)
+    in_path = os.path.join(DIR_PRE, fname)
 
-with open(dirPath, 'r', encoding=ecode) as f:
-    tmp_data = f.read()
-    lineArr = tmp_data.splitlines()
+    seg_out = os.path.join(DIR_SEG, f'seg_{keyword}_{ts}.csv')
+    pos_out = os.path.join(DIR_SEG, f'pos_{keyword}_{ts}.csv')
+    fin_out = os.path.join(DIR_SEG, f'fin_{keyword}_{ts}.csv')
 
-# 斷詞
-# 只取留言斷詞
-for line in lineArr:
-    tmp_data = line.split(',')
-    tmp_segArr = [] if tmp_data[4] == '' else do_CKIP_WS(tmp_data[4])
-    tmp_posArr = [] if tmp_segArr == '' else do_CKIP_POS(tmp_segArr)
-    # 將多維陣列轉成一維陣列
-    flattened = [i for item in tmp_segArr for i in item]
-    flattened2 = [','.join(sub_array) for sub_array in tmp_posArr]
-    segArr.append(';'.join(flattened)) # 斷詞
-    posArr.append(';'.join(flattened2)) # 詞性標示
-    tmp_finArr = [] if tmp_posArr == '' else cleaner(tmp_segArr, tmp_posArr)
-    clearArr.append(';'.join(tmp_finArr)) # 詞句清理
+    with open(in_path, 'r', encoding=ecode, newline='') as fr, \
+         open(seg_out, 'w', encoding=ecode, newline='') as fseg, \
+         open(pos_out, 'w', encoding=ecode, newline='') as fpos, \
+         open(fin_out, 'w', encoding=ecode, newline='') as ffin:
+        reader = csv.reader(fr)
+        writer_seg = csv.writer(fseg)
+        writer_pos = csv.writer(fpos)
+        writer_fin = csv.writer(ffin)
 
-with open(outPath, 'w', encoding=ecode) as f:
-    for line in segArr:
-        f.write(line + '\n')
+        for row in tqdm(reader, desc=f"Processing {fname}"):
+            # 留言位於第5欄 (index=5)
+            if len(row) <= 5 or not row[5]:
+                writer_seg.writerow([])
+                writer_pos.writerow([])
+                writer_fin.writerow([])
+                continue
+            text = row[5]
 
-with open(posPath, 'w', encoding=ecode) as f:
-    for line in posArr:
-        f.write(line + '\n')
+            # CKIP 斷詞 (回傳 List[str])
+            ws_tokens = do_CKIP_WS(text)
+            writer_seg.writerow(ws_tokens)
 
-with open(finPath, 'w', encoding=ecode) as f:
-    for line in clearArr:
-        f.write(line + '\n')
+            # CKIP POS 標註 -> List[List[str]]，取第一句作為序列
+            pos_lists = do_CKIP_POS(ws_tokens)
+            pos_tokens = pos_lists[0] if pos_lists else []
+            writer_pos.writerow(pos_tokens)
+
+            # 清理：保留名詞(N*)/動詞(V*) 且長度>1
+            fin_tokens = [tok for tok, tag in zip(ws_tokens, pos_tokens)
+                          if len(tok) > 1 and (tag.startswith("N") or tag.startswith("V"))]
+            writer_fin.writerow(fin_tokens)
+
+    print(f"Finished: {fname} -> seg/{keyword}/  (ts={ts})")
