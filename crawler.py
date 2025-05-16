@@ -17,7 +17,7 @@ from datetime import datetime
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-keyword = '維他命'
+keyword = '口罩'
 page = 60
 ecode = 'utf-8-sig'
 product_csv_path = f'{keyword}_商品資料.csv'
@@ -254,7 +254,10 @@ name = []
 link = []
 price = []
 sales = []
-if (False):
+
+# 去重 set：商品列表與留言爬蟲
+seen_comment_products = set()
+if (True):
     for i in tqdm(range(int(page))):
     #for i in tqdm(range(1)):
         driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
@@ -286,6 +289,11 @@ if (False):
             # 獲取匹配到的值
             if match:
                 i_code = match.group(1)
+
+            # 留言爬蟲階段去重
+            if i_code in seen_comment_products:
+                continue
+            seen_comment_products.add(i_code)
 
             # 到這邊確認都有抓到資料，才將它塞入陣列，否則可能會有缺漏
             link.append(tlink)
@@ -320,7 +328,7 @@ if (False):
 #save_sales_snapshot_long_format()
 
 #---------- Part 2. 補上商品的詳細資料，由於多設了爬取的標記，因此爬過的就不會再爬了 ----------
-print('---------- 開始進行留言爬蟲（只抓取新留言） ----------')
+print('---------- 開始進行留言爬蟲（含快照 + 去重） ----------')
 tStart = time.time()
 
 # 當前爬蟲時間作為檔名用
@@ -351,23 +359,29 @@ data2 = [[] for _ in range(20)]  # 原本19個欄位 + 資料擷取時間
 
 getData = pd.read_csv(product_csv_path, encoding=ecode)
 all_rows = []
-
-# ✅ 加入第一次原始資料的銷售快照
-if include_original_snapshot:
-    for _, row in getData.iterrows():
-        all_rows.append([
-            row['商品ID'],
-            row['商品名稱'],
-            row['價格'],
-            row['銷售數量'],
-            row['商品連結'],
-            current_time_str
-        ])
-    print(f'已從原始商品資料加入 {len(df)} 筆初始快照')
+# 去重 set：商品列表與留言爬蟲
+seen_comment_products = set()
 
 for i in tqdm(range(len(getData))):
-    if getData.iloc[i]['資料已完整爬取'] == True:
+    pid = str(getData.iloc[i]['商品ID'])
+    # 留言爬蟲階段去重
+    if pid in seen_comment_products:
         continue
+    seen_comment_products.add(pid)
+    # 若已標記為完成，跳過
+    if getData.iloc[i].get('資料已完整爬取', False):
+        continue
+
+    # ✅ 加入第一次原始資料的銷售快照
+    if include_original_snapshot:
+        all_rows.append([
+            getData.iloc[i]['商品ID'],
+            getData.iloc[i]['商品名稱'],
+            getData.iloc[i]['價格'],
+            getData.iloc[i]['銷售數量'],
+            getData.iloc[i]['商品連結'],
+            current_time_str
+        ])
 
     product_id = int(getData.iloc[i]['商品ID'])
     basic_info = [
@@ -399,7 +413,8 @@ for i in tqdm(range(len(getData))):
         current_time_str
     ])
 
-    all_pages = int(tmpDetail.get("filterList")[0]['count'])
+    count_str = tmpDetail.get("filterList")[0]['count']
+    all_pages = extract_number(count_str) or 0
     loopCount = all_pages // 10 + (1 if all_pages % 10 > 0 else 0)
 
     for page in range(1, loopCount + 1):
