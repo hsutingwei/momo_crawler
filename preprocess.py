@@ -1,49 +1,94 @@
+# -*- coding: utf-8 -*-
+"""
+把原先一次寫一檔（pre_<key>.csv）的流程，改成：
+  1. 針對 crawler 資料夾內所有「<keyword>_商品留言資料_YYYYMMDDHHMMSS.csv」
+  2. 各自輸出一檔 → preprocess/pre_<keyword>_YYYYMMDDHHMMSS.csv
+
+使用方法：
+    python preprocess_keyword_timestamp.py --keyword "益生菌"
+若不加參數，預設 key 取程式開頭的變數。
+"""
+
 import os
-from opencc import OpenCC
 import re
 import unicodedata
+import argparse
+import csv
+from opencc import OpenCC
 
 ### 此處理主要將商品名稱以及留言繁簡轉換
 ### 並根據留言ID去重複
 
+# ---------- 參數 & 路徑 ----------
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--keyword', type=str, help='關鍵字，對應 crawler 檔案名前綴')
+    return ap.parse_args()
+
+args = parse_args()
+
+keyword = args.keyword or '益生菌'    # 預設可改
+
+ROOT = r"C:\YvesProject\中央\線上評論\momo_crawler-main"
+DIR_CRAWLER = os.path.join(ROOT, 'crawler')
+DIR_PRE     = os.path.join(ROOT, 'preprocess')
+os.makedirs(DIR_PRE, exist_ok=True)
+
 ecode = 'utf-8-sig'
 cc = OpenCC('s2tw')
-key = 'chanel香水'
-dirPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\crawler"
-outPath = r"C:\YvesProject\中央\線上評論\momo_crawler-main\preprocess\pre_" + key + ".csv"
-lineArr = [] # 暫存所有留言爬蟲的陣列
-textObj = {} # 將所有留言根據留言ID去重複
-finalArr = [] # 預處理最終結果
 
-def do_money_special(lineArr):
+# ---- 修復功能 ----
+
+def is_valid_row(line):
+    return re.match(r'^\d+,', line.strip()) is not None
+
+def clean_broken_csv(input_path, output_path):
+    """
+    修復因留言中斷行或嵌入逗號導致的 CSV 換行錯誤。
+    以「行開頭非數字,」判斷是否為斷行，並合併到前一行。
+    """
+    with open(input_path, 'r', encoding=ecode) as infile, \
+         open(output_path, 'w', encoding=ecode) as outfile:
+        buffer = ''
+        for raw in infile:
+            line = raw.rstrip('\n')
+            if is_valid_row(line):
+                if buffer:
+                    outfile.write(buffer + '\n')
+                buffer = line
+            else:
+                buffer += ' ' + line
+        if buffer:
+            outfile.write(buffer + '\n')
+
+def do_money_special(arr, start_index=3):
     """
     因爬蟲時沒有正確將價格的千分位符號處理好，導致千分位符號與 csv 衝突，故此 function 專門處理這個問題
 
-    :param list lineArr: 單行的數據陣列
+    :param list arr: 單行的數據陣列
     :return list: 處理好後將處理完的單行陣列回傳
     """
-    start_index = 3
-    result = lineArr[start_index].replace('"', '')
-    haveError = False
+    # 長度不足就不處理
+    if len(arr) <= start_index:
+        return arr
 
-    # 從 start_index + 1 開始檢查後續的索引值
+    price_token = arr[start_index].replace('"', '')
     end_index = start_index + 1
-    for i in range(start_index + 1, len(lineArr)):
-        # 判斷該值是否為數字，且值為3位數 (千分位)
-        if lineArr[i].replace('"', '').isdigit() and len(lineArr[i].replace('"', '')) == 3:
-            result += lineArr[i].replace('"', '')
-            haveError = True
+
+    for i in range(start_index + 1, len(arr)):
+        tok = arr[i].replace('"', '')
+        if tok.isdigit() and len(tok) == 3:          # 千分位塊
+            price_token += tok
         else:
-            end_index = i # 紀錄非數字部分的索引
-            break  # 遇到非數字則停止
+            end_index = i
+            break
 
-    # 將累加的結果轉回整數並替換到原陣列
-    lineArr[start_index] = result
+    arr[start_index] = price_token
+    # 如果真有千分位塊才刪除；避免 list 切超過長度
+    if end_index > start_index + 1:
+        del arr[start_index + 1:end_index]
 
-    # 刪除中間的數字部分
-    del lineArr[start_index + 1:end_index]
-        
-    return lineArr
+    return arr
 
 def do_replace_to_Chinese(str, seg_char = ';'):
     """
@@ -74,28 +119,46 @@ def full2half(str: str) -> str:
     """
     return unicodedata.normalize("NFKC", str)
 
-for f in os.listdir(dirPath):
-    if os.path.isfile(os.path.join(dirPath, f)) and "留言資料" in f and (key == '' or key in f):
-        with open(dirPath + "/" + f, 'r', encoding=ecode) as f:
-            tmp_data = f.read()
-            lineArr = tmp_data.split('\n')
+# ---------- 主流程 ----------
 
-### 只將商品名稱以及留言做簡/繁轉換
-### 並根據留言ID去重複
-for line in lineArr:
-    if line != '':
-        text = line.split(',')
-        text = do_money_special(text)
-        tmp_id = text[5]
-        if tmp_id not in textObj:
-            text[1] = full2half(text[1]) # 全形轉半形
-            text[4] = full2half(text[4]) # 全形轉半形
-            text[1] = cc.convert(text[1]) # 簡繁轉換
-            text[4] = cc.convert(text[4]) # 簡繁轉換
-            text[4] = do_replace_to_Chinese(text[4]) # 去除非中文
-            finalArr.append(','.join(text))
+# 遍歷每個留言檔
+for fname in os.listdir(DIR_CRAWLER):
+    if keyword in fname and '商品留言資料_' in fname and fname.endswith('.csv'):
+        m = re.search(r'(\d{14})', fname)
+        if not m:
+            continue
+        ts = m.group(1)
+        src_path = os.path.join(DIR_CRAWLER, fname)
+        fixed_path = os.path.join(DIR_PRE, f'_fixed_{fname}')
+        out_path = os.path.join(DIR_PRE, f'pre_{keyword}_{ts}.csv')
 
+        # 修復原始檔換行錯誤到暫存
+        clean_broken_csv(src_path, fixed_path)
 
-with open(outPath, 'w', encoding=ecode) as f:
-    for line in finalArr:
-        f.write(line + '\n')
+        seen_ids = set()
+        lines_out = []
+        # 讀取修復後暫存檔
+        with open(fixed_path, 'r', encoding=ecode, newline='') as fr:
+            reader = csv.reader(fr)
+            for row in reader:
+                if len(row) < 6:
+                    continue
+                row = do_money_special(row)
+                msg_id = row[5]
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+
+                row[1] = cc.convert(full2half(row[1]))
+                row[4] = cc.convert(full2half(row[4]))
+                row[4] = do_replace_to_Chinese(row[4])
+                lines_out.append(row)
+
+        # 移除暫存檔
+        os.remove(fixed_path)
+
+        # 寫出預處理檔
+        with open(out_path, 'w', encoding=ecode, newline='') as fw:
+            writer = csv.writer(fw)
+            writer.writerows(lines_out)
+        print(f'輸出預處理: {out_path} 共 {len(lines_out)} 筆')
