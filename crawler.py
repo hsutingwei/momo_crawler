@@ -25,6 +25,7 @@ snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
 current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
 # 是否包含第一次「舊資料」中的銷售量當成一筆快照記錄
 include_original_snapshot = True
+is_new_keyword = False
 
 def is_valid_row(line):
     # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
@@ -257,7 +258,7 @@ sales = []
 
 # 去重 set：商品列表與留言爬蟲
 seen_comment_products = set()
-if (True):
+if (is_new_keyword):
     for i in tqdm(range(int(page))):
     #for i in tqdm(range(1)):
         driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
@@ -439,7 +440,7 @@ for i in tqdm(range(len(getData))):
             data2[0].append(basic_info[0])
             data2[1].append(basic_info[1])
             data2[2].append(basic_info[2])
-            data2[3].append(basic_info[3])
+            data2[3].append(basic_info[3] if is_new_keyword else latest_sales)
             data2[4].append(basic_info[4])
             data2[5].append(tmp_str)
             data2[6].append(comment_id)
