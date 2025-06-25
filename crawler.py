@@ -18,14 +18,23 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 keyword = '口罩'
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument('--keyword', type=str, help='搜尋關鍵字', default='益生菌')
+    return p.parse_args()
+
+args = parse_args()
+keyword = args.keyword
+
 page = 60
 ecode = 'utf-8-sig'
 product_csv_path = f'{keyword}_商品資料.csv'
 snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
 current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
 # 是否包含第一次「舊資料」中的銷售量當成一筆快照記錄
-include_original_snapshot = True
 is_new_keyword = False
+include_original_snapshot = is_new_keyword
 
 def is_valid_row(line):
     # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
