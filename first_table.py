@@ -165,14 +165,58 @@ sales['銷售數量'] = pd.to_numeric(sales['銷售數量'], errors='coerce').fi
 # 計算增幅
 sales['銷售增幅'] = sales.groupby('商品ID')['銷售數量'].pct_change().fillna(0)
 
+
+# --- 校验 & 改用 merge_asof 对齐 ---------------
+
+# 1. 抽样校验：随机选 5 组 (商品ID, snapshot)，看它们前后的销量记录
+sample = df_all[['商品ID','snapshot']].drop_duplicates().sample(5, random_state=42)
+print("\n— 抽样校验销量走势 —")
+for pid, snap in sample.itertuples(index=False):
+    window = (sales['商品ID']==pid) & \
+             (sales['擷取時間'] >= snap - pd.Timedelta(days=7)) & \
+             (sales['擷取時間'] <= snap + pd.Timedelta(days=7))
+    sel = sales.loc[window, ['擷取時間','銷售數量']].sort_values('擷取時間')
+    print(f"\n商品 {pid} 在 {snap.date()} ±7天 的销量：")
+    print(sel.to_string(index=False))
+
+# 2. 按商品用 merge_asof 重新对齐销量到 snapshot
+# 先把 df_all 按 (商品ID, snapshot) 排序
+df_all = df_all.sort_values(['商品ID','snapshot']).reset_index(drop=True)
+
+# 右表也同理
+sales2 = sales.sort_values(['商品ID','擷取時間']).reset_index(drop=True)
+
+# 然后再做 merge_asof
+df_all = pd.merge_asof(
+    df_all,
+    sales2[['商品ID','擷取時間','銷售數量']],
+    left_on='snapshot',      # df_all 里要对齐的时间列
+    right_on='擷取時間',     # sales2 里对应的时间列
+    by='商品ID',             # 按商品ID 分组
+    direction='backward'     # 向后找最近一次小于等于 snapshot 的记录
+)
+
+# 最后再基于新对齐的 “銷售數量” 计算增幅
+df_all['銷售增幅'] = (
+    df_all.groupby('商品ID')['銷售數量']
+          .pct_change()
+          .fillna(0)
+)
+print("\n— merge_asof 对齐后销量增幅描述 —")
+print(df_all['銷售增幅'].describe())
+
+
+
 # 6. 合併 df_all 與 sales（按商品ID 和 snapshot 對齊擷取時間）
-df_all['商品ID'] = df_all['商品ID'].astype(str)
+""" df_all['商品ID'] = df_all['商品ID'].astype(str)
 df_all['擷取時間'] = df_all['snapshot']
 merge_check = df_all.merge(
     sales[['商品ID','擷取時間','銷售增幅']],
     on=['商品ID','擷取時間'], how='left', indicator=True
-)
-print("Merge status via snapshot:\n", merge_check['_merge'].value_counts())
+) """
+# 6. 合併 df_all 與 sales（按商品ID 和 snapshot 對齊擷取時間）
+merge_check = df_all.copy()
+print("\nMerge status via snapshot:\n", merge_check.shape)
 
 # 7. 最终结果
 df_final = merge_check.copy()

@@ -5,6 +5,12 @@ CSV to Database Converter
 將爬蟲產生的CSV檔案轉換並儲存到資料庫
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
+print('DB_HOST:', os.getenv('DB_HOST'))
+
 import argparse
 import logging
 import os
