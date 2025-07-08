@@ -11,9 +11,8 @@ import pandas as pd
 import argparse
 import logging
 import shutil
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional
 from datetime import datetime
-import numpy as np
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,10 +46,10 @@ class SalesDecreasingFixer:
         
         return snapshot_files
     
-    def parse_sales_number(self, sales_str: str) -> float:
-        """解析銷售數量字串為數字"""
+    def parse_sales_number(self, sales_str: str) -> int:
+        """解析銷售數量字串為整數"""
         if pd.isna(sales_str) or sales_str == '':
-            return 0.0
+            return 0
         
         sales_str = str(sales_str).strip()
         
@@ -59,22 +58,23 @@ class SalesDecreasingFixer:
             # 移除萬字並轉換為數字
             number_part = sales_str.replace('萬', '').strip()
             try:
-                return float(number_part) * 10000
+                return int(float(number_part) * 10000)
             except ValueError:
-                return 0.0
+                return 0
         
         # 處理純數字
         try:
-            return float(sales_str)
+            return int(float(sales_str))
         except ValueError:
-            return 0.0
+            return 0
     
-    def format_sales_number(self, sales_num: float) -> str:
-        """將數字格式化為萬字格式"""
+    def format_sales_number(self, sales_num: int) -> str:
+        """將整數格式化為萬字格式"""
         if sales_num >= 10000:
-            return f"{sales_num / 10000:.1f}萬"
+            # 確保整數格式，不要小數點
+            return f"{sales_num // 10000}萬"
         else:
-            return str(int(sales_num))
+            return str(sales_num)
     
     def detect_decreasing_issues(self, df: pd.DataFrame) -> List[Dict]:
         """檢測銷售數量遞減問題"""
@@ -88,7 +88,7 @@ class SalesDecreasingFixer:
             if len(group_sorted) < 2:
                 continue
             
-            # 轉換銷售數量為數字進行比較
+            # 轉換銷售數量為整數進行比較
             sales_numbers = []
             for _, row in group_sorted.iterrows():
                 sales_num = self.parse_sales_number(row['銷售數量'])
@@ -245,7 +245,7 @@ class SalesDecreasingFixer:
         except Exception as e:
             logger.error(f"預覽檔案 {snapshot_path} 時發生錯誤: {e}")
     
-    def fix_all_snapshots(self, snapshot_files: List[str] = None):
+    def fix_all_snapshots(self, snapshot_files: Optional[List[str]] = None):
         """修正所有快照檔案"""
         if snapshot_files is None:
             snapshot_files = self.find_snapshot_files()
@@ -272,7 +272,7 @@ class SalesDecreasingFixer:
             for backup_file in self.backup_files:
                 print(f"  {backup_file}")
     
-    def preview_all_issues(self, snapshot_files: List[str] = None):
+    def preview_all_issues(self, snapshot_files: Optional[List[str]] = None):
         """預覽所有檔案的遞減問題"""
         if snapshot_files is None:
             snapshot_files = self.find_snapshot_files()

@@ -10,7 +10,7 @@ import pandas as pd
 import argparse
 import logging
 import shutil
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime
 
 # 設定日誌
@@ -142,7 +142,7 @@ class SalesSnapshotFixer:
             print(f"     時間: {record['capture_time']}")
             print(f"     修正: {record['original_sales']} -> {record['fixed_sales']}")
     
-    def fix_all_snapshots(self, issues_file: str, keywords: List[str] = None):
+    def fix_all_snapshots(self, issues_file: str, keywords: Optional[List[str]] = None):
         """修正所有快照檔案"""
         # 載入格式問題
         issues_df = self.load_format_issues(issues_file)
@@ -174,7 +174,7 @@ class SalesSnapshotFixer:
             for backup_file in self.backup_files:
                 print(f"  {backup_file}")
     
-    def preview_fixes(self, issues_file: str, keywords: List[str] = None):
+    def preview_fixes(self, issues_file: str, keywords: Optional[List[str]] = None):
         """預覽修正內容（不實際修改檔案）"""
         issues_df = self.load_format_issues(issues_file)
         if issues_df.empty:
