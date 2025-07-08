@@ -49,6 +49,9 @@ class CSVToDBConverter:
         self.error_logger = None
         self.validator = DataValidator()
         
+        # 立即連接資料庫並初始化相關物件
+        self.connect_database()
+        
     def connect_database(self):
         """連接資料庫"""
         try:
@@ -58,6 +61,10 @@ class CSVToDBConverter:
             logger.info("資料庫連接成功")
         except Exception as e:
             logger.error(f"資料庫連接失敗: {e}")
+            # 確保物件不為 None
+            self.db_connection = None
+            self.db_ops = None
+            self.error_logger = None
             raise
     
     def close_database(self):
@@ -105,41 +112,42 @@ class CSVToDBConverter:
         
         for index, row in df.iterrows():
             try:
+                row_index = int(str(index)) + 2
                 # 驗證商品ID
-                product_id, product_id_error = self.validator.validate_product_id(row['商品ID'])
+                product_id, product_id_error = self.validator.validate_product_id(str(row['商品ID']))
                 if product_id_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "product", index + 2, "商品ID",
+                        file_path, keyword, "product", row_index, "商品ID",
                         str(row['商品ID']), "format_error", product_id_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證商品名稱
-                name, name_error = self.validator.validate_text_field(row['商品名稱'], 500)
+                name, name_error = self.validator.validate_text_field(str(row['商品名稱']), 500)
                 if name_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "product", index + 2, "商品名稱",
+                        file_path, keyword, "product", row_index, "商品名稱",
                         str(row['商品名稱']), "format_error", name_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證價格
-                price, price_error = self.validator.validate_price(row['價格'])
+                price, price_error = self.validator.validate_price(str(row['價格']))
                 if price_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "product", index + 2, "價格",
+                        file_path, keyword, "product", row_index, "價格",
                         str(row['價格']), "format_error", price_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證商品連結
-                product_link, link_error = self.validator.validate_url(row['商品連結'])
+                product_link, link_error = self.validator.validate_url(str(row['商品連結']))
                 if link_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "product", index + 2, "商品連結",
+                        file_path, keyword, "product", row_index, "商品連結",
                         str(row['商品連結']), "format_error", link_error
                     )
                     error_records += 1
@@ -151,7 +159,7 @@ class CSVToDBConverter:
                 
             except Exception as e:
                 self.error_logger.log_validation_error(
-                    file_path, keyword, "product", index + 2, "general",
+                    file_path, keyword, "product", row_index, "general",
                     str(row), "format_error", str(e)
                 )
                 error_records += 1
@@ -205,31 +213,32 @@ class CSVToDBConverter:
         
         for index, row in df.iterrows():
             try:
+                row_index = int(str(index)) + 2
                 # 驗證商品ID
-                product_id, product_id_error = self.validator.validate_product_id(row['商品ID'])
+                product_id, product_id_error = self.validator.validate_product_id(str(row['商品ID']))
                 if product_id_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "snapshot", index + 2, "商品ID",
+                        file_path, keyword, "snapshot", row_index, "商品ID",
                         str(row['商品ID']), "format_error", product_id_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證銷售數量
-                sales_count, sales_unit, sales_error = self.validator.validate_sales_count(row['銷售數量'])
+                sales_count, sales_unit, sales_error = self.validator.validate_sales_count(str(row['銷售數量']))
                 if sales_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "snapshot", index + 2, "銷售數量",
+                        file_path, keyword, "snapshot", row_index, "銷售數量",
                         str(row['銷售數量']), "format_error", sales_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證擷取時間
-                capture_time, time_error = self.validator.validate_timestamp(row['擷取時間'])
+                capture_time, time_error = self.validator.validate_timestamp(str(row['擷取時間']))
                 if time_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "snapshot", index + 2, "擷取時間",
+                        file_path, keyword, "snapshot", row_index, "擷取時間",
                         str(row['擷取時間']), "format_error", time_error
                     )
                     error_records += 1
@@ -239,7 +248,7 @@ class CSVToDBConverter:
                 snapshot_key = (product_id, capture_time)
                 if snapshot_key in existing_snapshots:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "snapshot", index + 2, "duplicate",
+                        file_path, keyword, "snapshot", row_index, "duplicate",
                         f"{product_id}_{capture_time}", "duplicate", "銷售快照已存在"
                     )
                     error_records += 1
@@ -251,7 +260,7 @@ class CSVToDBConverter:
                 
             except Exception as e:
                 self.error_logger.log_validation_error(
-                    file_path, keyword, "snapshot", index + 2, "general",
+                    file_path, keyword, "snapshot", row_index, "general",
                     str(row), "format_error", str(e)
                 )
                 error_records += 1
@@ -305,169 +314,170 @@ class CSVToDBConverter:
         
         for index, row in df.iterrows():
             try:
+                row_index = int(str(index)) + 2
                 # 驗證評論ID
-                comment_id, comment_id_error = self.validator.validate_comment_id(row['留言ID'])
+                comment_id, comment_id_error = self.validator.validate_comment_id(str(row['留言ID']))
                 if comment_id_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言ID",
+                        file_path, keyword, "comment", row_index, "留言ID",
                         str(row['留言ID']), "format_error", comment_id_error
                     )
                     error_records += 1
                     continue
                 
                 # 檢查是否已存在
-                if comment_id in existing_comment_ids:
+                if comment_id and comment_id in existing_comment_ids:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言ID",
-                        comment_id, "duplicate", "評論已存在"
+                        file_path, keyword, "comment", row_index, "留言ID",
+                        str(comment_id), "duplicate", "評論已存在"
                     )
                     error_records += 1
                     continue
                 
                 # 驗證商品ID
-                product_id, product_id_error = self.validator.validate_product_id(row['商品ID'])
+                product_id, product_id_error = self.validator.validate_product_id(str(row['商品ID']))
                 if product_id_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "商品ID",
+                        file_path, keyword, "comment", row_index, "商品ID",
                         str(row['商品ID']), "format_error", product_id_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證評論內容
-                comment_text = self.validator.clean_comment_text(row['留言'])
+                comment_text = self.validator.clean_comment_text(str(row['留言']))
                 comment_text, text_error = self.validator.validate_text_field(comment_text)
                 if text_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言",
+                        file_path, keyword, "comment", row_index, "留言",
                         str(row['留言']), "format_error", text_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證客戶名稱
-                customer_name, name_error = self.validator.validate_text_field(row['留言者名稱'], 200)
+                customer_name, name_error = self.validator.validate_text_field(str(row['留言者名稱']), 200)
                 if name_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言者名稱",
+                        file_path, keyword, "comment", row_index, "留言者名稱",
                         str(row['留言者名稱']), "format_error", name_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證評論時間
-                comment_date, date_error = self.validator.validate_timestamp(row['留言時間'])
+                comment_date, date_error = self.validator.validate_timestamp(str(row['留言時間']))
                 if date_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言時間",
+                        file_path, keyword, "comment", row_index, "留言時間",
                         str(row['留言時間']), "format_error", date_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證商品類型
-                goods_type, type_error = self.validator.validate_text_field(row['商品 Type'], 100)
+                goods_type, type_error = self.validator.validate_text_field(str(row['商品 Type']), 100)
                 if type_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "商品 Type",
+                        file_path, keyword, "comment", row_index, "商品 Type",
                         str(row['商品 Type']), "format_error", type_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證圖片URLs
-                image_urls, urls_error = self.validator.validate_json_field(row['留言 圖'])
+                image_urls, urls_error = self.validator.validate_json_field(str(row['留言 圖']))
                 if urls_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言 圖",
+                        file_path, keyword, "comment", row_index, "留言 圖",
                         str(row['留言 圖']), "format_error", urls_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證布林值欄位
-                is_like, like_error = self.validator.validate_boolean_field(row['isLike'])
+                is_like, like_error = self.validator.validate_boolean_field(str(row['isLike']))
                 if like_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "isLike",
+                        file_path, keyword, "comment", row_index, "isLike",
                         str(row['isLike']), "format_error", like_error
                     )
                     error_records += 1
                     continue
                 
-                is_show_like, show_like_error = self.validator.validate_boolean_field(row['isShowLike'])
+                is_show_like, show_like_error = self.validator.validate_boolean_field(str(row['isShowLike']))
                 if show_like_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "isShowLike",
+                        file_path, keyword, "comment", row_index, "isShowLike",
                         str(row['isShowLike']), "format_error", show_like_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證整數欄位
-                like_count, like_count_error = self.validator.validate_integer_field(row['留言 likeCount'])
+                like_count, like_count_error = self.validator.validate_integer_field(str(row['留言 likeCount']))
                 if like_count_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言 likeCount",
+                        file_path, keyword, "comment", row_index, "留言 likeCount",
                         str(row['留言 likeCount']), "format_error", like_count_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證回覆內容
-                reply_content, reply_error = self.validator.validate_text_field(row['留言 replyContent'])
+                reply_content, reply_error = self.validator.validate_text_field(str(row['留言 replyContent']))
                 if reply_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言 replyContent",
+                        file_path, keyword, "comment", row_index, "留言 replyContent",
                         str(row['留言 replyContent']), "format_error", reply_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證回覆時間
-                reply_date, reply_date_error = self.validator.validate_timestamp(row['留言 replyDate'])
+                reply_date, reply_date_error = self.validator.validate_timestamp(str(row['留言 replyDate']))
                 if reply_date_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言 replyDate",
+                        file_path, keyword, "comment", row_index, "留言 replyDate",
                         str(row['留言 replyDate']), "format_error", reply_date_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證評分
-                score, score_error = self.validator.validate_score(row['留言星數'])
+                score, score_error = self.validator.validate_score(str(row['留言星數']))
                 if score_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "留言星數",
+                        file_path, keyword, "comment", row_index, "留言星數",
                         str(row['留言星數']), "format_error", score_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證影片相關欄位
-                video_thumbnail_img, thumb_error = self.validator.validate_url(row['videoThumbnailImg'])
+                video_thumbnail_img, thumb_error = self.validator.validate_url(str(row['videoThumbnailImg']))
                 if thumb_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "videoThumbnailImg",
+                        file_path, keyword, "comment", row_index, "videoThumbnailImg",
                         str(row['videoThumbnailImg']), "format_error", thumb_error
                     )
                     error_records += 1
                     continue
                 
-                video_url, video_error = self.validator.validate_url(row['videoUrl'])
+                video_url, video_error = self.validator.validate_url(str(row['videoUrl']))
                 if video_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "videoUrl",
+                        file_path, keyword, "comment", row_index, "videoUrl",
                         str(row['videoUrl']), "format_error", video_error
                     )
                     error_records += 1
                     continue
                 
                 # 驗證擷取時間
-                capture_time, capture_error = self.validator.validate_timestamp(row['資料擷取時間'])
+                capture_time, capture_error = self.validator.validate_timestamp(str(row['資料擷取時間']))
                 if capture_error:
                     self.error_logger.log_validation_error(
-                        file_path, keyword, "comment", index + 2, "資料擷取時間",
+                        file_path, keyword, "comment", row_index, "資料擷取時間",
                         str(row['資料擷取時間']), "format_error", capture_error
                     )
                     error_records += 1
@@ -484,7 +494,7 @@ class CSVToDBConverter:
                 
             except Exception as e:
                 self.error_logger.log_validation_error(
-                    file_path, keyword, "comment", index + 2, "general",
+                    file_path, keyword, "comment", row_index, "general",
                     str(row), "format_error", str(e)
                 )
                 error_records += 1
@@ -544,7 +554,7 @@ class CSVToDBConverter:
             self.error_logger.log_sync_error(file_path, keyword, file_type, str(e), file_size)
             return False
     
-    def run(self, base_dir: str = ".", keyword: str = None, 
+    def run(self, base_dir: str = ".", keyword: Optional[str] = None, 
             move_processed: bool = False, generate_report: bool = True):
         """
         執行轉換程序
@@ -558,8 +568,9 @@ class CSVToDBConverter:
         logger.info("開始CSV到資料庫轉換程序")
         
         try:
-            # 連接資料庫
-            self.connect_database()
+            # 檢查資料庫連接狀態
+            if self.db_connection is None or self.db_ops is None or self.error_logger is None:
+                self.connect_database()
             
             # 初始化資料庫
             self.db_config.init_database()
