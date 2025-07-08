@@ -44,9 +44,17 @@ class SalesSnapshotFixer:
     
     def find_snapshot_file(self, keyword: str) -> str:
         """尋找對應的快照檔案"""
-        snapshot_path = f'../crawler/{keyword}_商品銷售快照.csv'
-        if os.path.exists(snapshot_path):
-            return snapshot_path
+        # 嘗試多個可能的路徑
+        possible_paths = [
+            f'../crawler/{keyword}_商品銷售快照.csv',
+            f'crawler/{keyword}_商品銷售快照.csv',
+            f'./crawler/{keyword}_商品銷售快照.csv'
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        
         return ""
     
     def fix_single_snapshot(self, keyword: str, issues_df: pd.DataFrame) -> bool:
