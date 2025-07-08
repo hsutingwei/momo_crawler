@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import argparse
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 
 # 設定日誌
@@ -22,24 +22,26 @@ class SalesChangesAnalyzer:
     def __init__(self):
         self.changes_data = []
         
-    def extract_number(self, sales_str: str) -> int:
+    def extract_number(self, sales_str) -> int:
         """從銷售字串中提取數字"""
         if pd.isna(sales_str) or sales_str == '':
             return 0
         
         import re
+        # 轉換為字串
+        sales_str = str(sales_str)
+        
         # 移除萬字並轉換為數字
-        if isinstance(sales_str, str):
-            if '萬' in sales_str:
-                # 提取數字部分
-                match = re.search(r'(\d+(?:\.\d+)?)', sales_str)
-                if match:
-                    return int(float(match.group(1)) * 10000)  # 萬轉為實際數字
-            else:
-                # 直接提取數字
-                match = re.search(r'(\d+)', sales_str)
-                if match:
-                    return int(match.group(1))
+        if '萬' in sales_str:
+            # 提取數字部分
+            match = re.search(r'(\d+(?:\.\d+)?)', sales_str)
+            if match:
+                return int(float(match.group(1)) * 10000)  # 萬轉為實際數字
+        else:
+            # 直接提取數字
+            match = re.search(r'(\d+)', sales_str)
+            if match:
+                return int(match.group(1))
         return 0
     
     def find_snapshot_files(self) -> List[str]:
@@ -47,10 +49,10 @@ class SalesChangesAnalyzer:
         snapshot_files = []
         
         # 檢查 crawler 目錄
-        if os.path.exists('crawler'):
-            for file in os.listdir('crawler'):
+        if os.path.exists('../crawler'):
+            for file in os.listdir('../crawler'):
                 if file.endswith('_商品銷售快照.csv') and not file.endswith('.bak'):
-                    snapshot_files.append(os.path.join('crawler', file))
+                    snapshot_files.append(os.path.join('../crawler', file))
         
         return sorted(snapshot_files)
     
@@ -143,7 +145,7 @@ class SalesChangesAnalyzer:
         logger.info(f"總共找到 {len(df_changes)} 筆銷售變化記錄")
         return df_changes
     
-    def save_results(self, df: pd.DataFrame, output_file: str = None):
+    def save_results(self, df: pd.DataFrame, output_file: Optional[str] = None):
         """儲存結果"""
         if df.empty:
             logger.warning("沒有資料可儲存")

@@ -37,7 +37,7 @@ class SalesDecreasingFixer:
     def find_snapshot_files(self) -> List[str]:
         """尋找所有快照檔案"""
         snapshot_files = []
-        crawler_dir = 'crawler'
+        crawler_dir = '../crawler'
         
         if os.path.exists(crawler_dir):
             for file in os.listdir(crawler_dir):

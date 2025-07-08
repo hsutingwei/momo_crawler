@@ -44,7 +44,7 @@ class SalesSnapshotFixer:
     
     def find_snapshot_file(self, keyword: str) -> str:
         """尋找對應的快照檔案"""
-        snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
+        snapshot_path = f'../crawler/{keyword}_商品銷售快照.csv'
         if os.path.exists(snapshot_path):
             return snapshot_path
         return ""
