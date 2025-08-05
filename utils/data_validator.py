@@ -62,8 +62,8 @@ class DataValidator:
         驗證時間格式
         支援多種常見的日期格式
         """
-        if not date_str or str(date_str).strip() == '':
-            return None, "時間為空值"
+        if not date_str or str(date_str).strip() == '' or str(date_str).lower() == 'nan':
+            return None, None  # 空值不算錯誤
         
         date_str = str(date_str).strip()
         
@@ -76,7 +76,8 @@ class DataValidator:
             '%m/%d/%Y',
             '%d/%m/%Y',
             '%Y年%m月%d日',
-            '%Y年%m月%d日 %H:%M:%S'
+            '%Y年%m月%d日 %H:%M:%S',
+            '%Y%m%d%H%M%S'  # 新增：20250802215524 格式
         ]
         
         for fmt in formats:
@@ -141,22 +142,34 @@ class DataValidator:
         """
         驗證JSON格式欄位
         """
-        if not json_str or str(json_str).strip() == '':
+        if not json_str or str(json_str).strip() == '' or str(json_str).lower() == 'nan':
             return None, None  # 空值不算錯誤
         
+        json_str = str(json_str).strip()
+        
         try:
-            # 嘗試解析JSON
-            json.loads(str(json_str))
-            return str(json_str), None
-        except (json.JSONDecodeError, TypeError) as e:
-            return None, f"JSON格式錯誤: {json_str} - {str(e)}"
+            # 嘗試標準JSON解析
+            json.loads(json_str)
+            return json_str, None
+        except (json.JSONDecodeError, TypeError):
+            # 如果是Python列表格式（單引號），轉換為標準JSON格式
+            if json_str.startswith('[') and json_str.endswith(']') and "'" in json_str:
+                try:
+                    # 替換單引號為雙引號
+                    json_str_converted = json_str.replace("'", '"')
+                    json.loads(json_str_converted)  # 驗證轉換後的格式
+                    return json_str_converted, None
+                except (json.JSONDecodeError, TypeError) as e:
+                    return None, f"轉換後JSON格式錯誤: {json_str} - {str(e)}"
+            else:
+                return None, f"JSON格式錯誤: {json_str}"
     
     @staticmethod
     def validate_boolean_field(bool_str: str) -> Tuple[Optional[bool], Optional[str]]:
         """
         驗證布林值格式
         """
-        if not bool_str or str(bool_str).strip() == '':
+        if not bool_str or str(bool_str).strip() == '' or str(bool_str).lower() == 'nan':
             return None, None  # 空值不算錯誤
         
         bool_str = str(bool_str).strip().lower()
@@ -173,7 +186,7 @@ class DataValidator:
         """
         驗證整數格式
         """
-        if not int_str or str(int_str).strip() == '':
+        if not int_str or str(int_str).strip() == '' or str(int_str).lower() == 'nan':
             return None, None  # 空值不算錯誤
         
         try:
@@ -187,7 +200,7 @@ class DataValidator:
         """
         驗證文字欄位
         """
-        if not text:
+        if not text or str(text).strip() == '' or str(text).lower() == 'nan':
             return None, None  # 空值不算錯誤
         
         text = str(text).strip()
@@ -217,7 +230,7 @@ class DataValidator:
         """
         驗證URL格式
         """
-        if not url or str(url).strip() == '':
+        if not url or str(url).strip() == '' or str(url).lower() == 'nan':
             return None, None  # 空值不算錯誤
         
         url = str(url).strip()

@@ -146,7 +146,8 @@ class ErrorLogger:
             錯誤統計字典
         """
         try:
-            with self.db.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor_factory = psycopg2.extras.DictCursor if psycopg2.extras else None
+            with self.db.cursor(cursor_factory=cursor_factory) as cursor:
                 where_clause = "WHERE 1=1"
                 params = []
                 
@@ -222,7 +223,8 @@ class ErrorLogger:
             同步統計字典
         """
         try:
-            with self.db.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor_factory = psycopg2.extras.DictCursor if psycopg2.extras else None
+            with self.db.cursor(cursor_factory=cursor_factory) as cursor:
                 where_clause = "WHERE 1=1"
                 params = []
                 

@@ -135,6 +135,9 @@ class FileUtils:
                 logger.warning(f"CSV檔案為空: {file_path}")
                 return None
             
+            # 清理欄位名稱（移除前後空格）
+            df.columns = df.columns.str.strip()
+            
             logger.info(f"成功讀取CSV檔案: {file_path}, 共 {len(df)} 筆記錄")
             return df
             
