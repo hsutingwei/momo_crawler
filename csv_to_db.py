@@ -530,12 +530,11 @@ class CSVToDBConverter:
             )
             
             # 根據檔案類型處理
-            # if file_type == "product":
-            #     total, valid, error = self.process_products_csv(file_path, keyword)
-            # elif file_type == "snapshot":
-            #     total, valid, error = self.process_snapshots_csv(file_path, keyword)
-            # el
-            if file_type == "comment":
+            if file_type == "product":
+                total, valid, error = self.process_products_csv(file_path, keyword)
+            elif file_type == "snapshot":
+                total, valid, error = self.process_snapshots_csv(file_path, keyword)
+            elif file_type == "comment":
                 total, valid, error = self.process_comments_csv(file_path, keyword)
             else:
                 logger.error(f"不支援的檔案類型: {file_type}")

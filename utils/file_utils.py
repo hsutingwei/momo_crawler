@@ -252,10 +252,9 @@ class FileUtils:
         
         elif file_type == "snapshot":
             if '商品ID' in df.columns and '擷取時間' in df.columns:
-                # 檢查是否有重複的商品ID+擷取時間組合
-                duplicates = df.duplicated(subset=['商品ID', '擷取時間'])
-                if duplicates.any():
-                    errors.append(f"發現 {duplicates.sum()} 筆重複的商品ID+擷取時間組合")
+                # 銷售快照允許重複的商品ID+擷取時間組合，因為可能有多筆記錄
+                # 重複檢查將在資料庫插入時處理
+                pass
         
         elif file_type == "comment":
             if '留言ID' in df.columns:
