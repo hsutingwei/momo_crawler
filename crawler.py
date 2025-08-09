@@ -79,7 +79,8 @@ def parse_args():
     return p.parse_args()
 
 args = parse_args()
-keyword = args.keyword
+if args.keyword is not None:
+    keyword = args.keyword
 
 # 解析指定時間（如果有的話）
 if args.designate_capture_time:
@@ -551,6 +552,10 @@ for i in tqdm(range(len(getData))):
             tmp_str = '，'.join(tmp_str.splitlines())
             tmp_str = re.sub(r'[，]+', '，', tmp_str)
 
+            tmp_str2 = obj["replyContent"].replace(',', '，')
+            tmp_str2 = '，'.join(tmp_str2.splitlines())
+            tmp_str2 = re.sub(r'[，]+', '，', tmp_str2)
+
             data2[0].append(basic_info[0])
             data2[1].append(basic_info[1])
             data2[2].append(basic_info[2])
@@ -565,7 +570,7 @@ for i in tqdm(range(len(getData))):
             data2[11].append(obj["isLike"])
             data2[12].append(obj["isShowLike"])
             data2[13].append(obj["likeCount"])
-            data2[14].append(obj["replyContent"].replace(',', '，'))
+            data2[14].append(tmp_str2)
             data2[15].append(obj["replyDate"])
             data2[16].append(obj["score"])
             data2[17].append(obj["videoThumbnailImg"])
