@@ -19,11 +19,6 @@ from datetime import datetime
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-keyword = '口罩'
-# designate_dt = None
-designate_dt = '2025-07-11 1407'
-print(keyword)
-
 def parse_designate_minute(s: str) -> datetime:
     """
     解析指定時間字串為 datetime 物件
@@ -41,6 +36,10 @@ def parse_designate_minute(s: str) -> datetime:
         return datetime.strptime(s, '%Y-%m-%d %H%M')
     except ValueError as e:
         raise ValueError(f"時間格式錯誤: {s}，正確格式應為 YYYY-MM-DD HHmm，例如: 2025-07-11 1407") from e
+
+keyword = '口罩'
+# designate_dt = None
+designate_dt = parse_designate_minute('2025-07-11 1407')
 
 def parse_comment_datetime(s: str) -> datetime:
     """
@@ -430,7 +429,9 @@ print('---------- 開始進行留言爬蟲（含快照 + 去重） ----------')
 tStart = time.time()
 
 # 當前爬蟲時間作為檔名用
-comments_file_path = f'crawler/{keyword}_商品留言資料_{current_time_str}.csv'
+# 資料擷取時間：如果有 designate_dt 則使用 designate_dt，否則使用 current_time_str
+capture_time = designate_dt.strftime('%Y-%m-%d %H:%M:%S') if designate_dt else current_time_str
+comments_file_path = f'crawler/{keyword}_商品留言資料_{capture_time}.csv'
 
 # 嘗試讀取過去已爬留言ID，避免重複爬取
 existing_comment_ids = set()
