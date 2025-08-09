@@ -30,7 +30,7 @@ from utils.file_utils import FileUtils
 
 # 設定日誌
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('csv_to_db.log', encoding='utf-8'),
@@ -290,6 +290,19 @@ class CSVToDBConverter:
         if df is None:
             return 0, 0, 0
         
+        # 檢查是否有「資料擷取時間」欄位，如果沒有則從檔案名提取
+        if '資料擷取時間' not in df.columns:
+            logger.info(f"檔案 {file_path} 缺少「資料擷取時間」欄位，將從檔案名提取時間戳記")
+            capture_time_from_filename = FileUtils.extract_timestamp_from_filename(file_path)
+            if capture_time_from_filename:
+                df['資料擷取時間'] = capture_time_from_filename
+                logger.info(f"已從檔案名提取時間戳記: {capture_time_from_filename}")
+            else:
+                logger.warning(f"無法從檔案名 {file_path} 提取時間戳記")
+                # 使用當前時間作為預設值
+                df['資料擷取時間'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                logger.info("使用當前時間作為預設的資料擷取時間")
+        
         # 驗證CSV結構
         expected_columns = FileUtils.get_expected_columns("comment")
         is_valid, errors = FileUtils.validate_csv_structure(df, expected_columns, "comment")
@@ -315,9 +328,15 @@ class CSVToDBConverter:
         for index, row in df.iterrows():
             try:
                 row_index = int(str(index)) + 2
+                
+                # 記錄處理進度
+                if index % 1000 == 0:
+                    logger.info(f"處理進度: {index}/{total_records}")
+                
                 # 驗證評論ID
                 comment_id, comment_id_error = self.validator.validate_comment_id(str(row['留言ID']))
                 if comment_id_error:
+                    logger.debug(f"Row {row_index}: 評論ID驗證失敗 - {comment_id_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言ID",
                         str(row['留言ID']), "format_error", comment_id_error
@@ -327,6 +346,7 @@ class CSVToDBConverter:
                 
                 # 檢查是否已存在
                 if comment_id and comment_id in existing_comment_ids:
+                    logger.debug(f"Row {row_index}: 評論已存在 - {comment_id}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言ID",
                         str(comment_id), "duplicate", "評論已存在"
@@ -337,6 +357,7 @@ class CSVToDBConverter:
                 # 驗證商品ID
                 product_id, product_id_error = self.validator.validate_product_id(str(row['商品ID']))
                 if product_id_error:
+                    logger.debug(f"Row {row_index}: 商品ID驗證失敗 - {product_id_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "商品ID",
                         str(row['商品ID']), "format_error", product_id_error
@@ -348,6 +369,7 @@ class CSVToDBConverter:
                 comment_text = self.validator.clean_comment_text(str(row['留言']))
                 comment_text, text_error = self.validator.validate_text_field(comment_text)
                 if text_error:
+                    logger.debug(f"Row {row_index}: 評論內容驗證失敗 - {text_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言",
                         str(row['留言']), "format_error", text_error
@@ -358,6 +380,7 @@ class CSVToDBConverter:
                 # 驗證客戶名稱
                 customer_name, name_error = self.validator.validate_text_field(str(row['留言者名稱']), 200)
                 if name_error:
+                    logger.debug(f"Row {row_index}: 客戶名稱驗證失敗 - {name_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言者名稱",
                         str(row['留言者名稱']), "format_error", name_error
@@ -368,6 +391,7 @@ class CSVToDBConverter:
                 # 驗證評論時間
                 comment_date, date_error = self.validator.validate_timestamp(str(row['留言時間']))
                 if date_error:
+                    logger.debug(f"Row {row_index}: 評論時間驗證失敗 - {date_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言時間",
                         str(row['留言時間']), "format_error", date_error
@@ -378,6 +402,7 @@ class CSVToDBConverter:
                 # 驗證商品類型
                 goods_type, type_error = self.validator.validate_text_field(str(row['商品 Type']), 100)
                 if type_error:
+                    logger.debug(f"Row {row_index}: 商品類型驗證失敗 - {type_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "商品 Type",
                         str(row['商品 Type']), "format_error", type_error
@@ -388,6 +413,7 @@ class CSVToDBConverter:
                 # 驗證圖片URLs
                 image_urls, urls_error = self.validator.validate_json_field(str(row['留言 圖']))
                 if urls_error:
+                    logger.debug(f"Row {row_index}: 圖片URLs驗證失敗 - {urls_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言 圖",
                         str(row['留言 圖']), "format_error", urls_error
@@ -398,6 +424,7 @@ class CSVToDBConverter:
                 # 驗證布林值欄位
                 is_like, like_error = self.validator.validate_boolean_field(str(row['isLike']))
                 if like_error:
+                    logger.debug(f"Row {row_index}: isLike驗證失敗 - {like_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "isLike",
                         str(row['isLike']), "format_error", like_error
@@ -407,6 +434,7 @@ class CSVToDBConverter:
                 
                 is_show_like, show_like_error = self.validator.validate_boolean_field(str(row['isShowLike']))
                 if show_like_error:
+                    logger.debug(f"Row {row_index}: isShowLike驗證失敗 - {show_like_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "isShowLike",
                         str(row['isShowLike']), "format_error", show_like_error
@@ -417,6 +445,7 @@ class CSVToDBConverter:
                 # 驗證整數欄位
                 like_count, like_count_error = self.validator.validate_integer_field(str(row['留言 likeCount']))
                 if like_count_error:
+                    logger.debug(f"Row {row_index}: likeCount驗證失敗 - {like_count_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言 likeCount",
                         str(row['留言 likeCount']), "format_error", like_count_error
@@ -427,6 +456,7 @@ class CSVToDBConverter:
                 # 驗證回覆內容
                 reply_content, reply_error = self.validator.validate_text_field(str(row['留言 replyContent']))
                 if reply_error:
+                    logger.debug(f"Row {row_index}: 回覆內容驗證失敗 - {reply_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言 replyContent",
                         str(row['留言 replyContent']), "format_error", reply_error
@@ -437,6 +467,7 @@ class CSVToDBConverter:
                 # 驗證回覆時間
                 reply_date, reply_date_error = self.validator.validate_timestamp(str(row['留言 replyDate']))
                 if reply_date_error:
+                    logger.debug(f"Row {row_index}: 回覆時間驗證失敗 - {reply_date_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言 replyDate",
                         str(row['留言 replyDate']), "format_error", reply_date_error
@@ -447,6 +478,7 @@ class CSVToDBConverter:
                 # 驗證評分
                 score, score_error = self.validator.validate_score(str(row['留言星數']))
                 if score_error:
+                    logger.debug(f"Row {row_index}: 評分驗證失敗 - {score_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "留言星數",
                         str(row['留言星數']), "format_error", score_error
@@ -457,6 +489,7 @@ class CSVToDBConverter:
                 # 驗證影片相關欄位
                 video_thumbnail_img, thumb_error = self.validator.validate_url(str(row['videoThumbnailImg']))
                 if thumb_error:
+                    logger.debug(f"Row {row_index}: 影片縮圖驗證失敗 - {thumb_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "videoThumbnailImg",
                         str(row['videoThumbnailImg']), "format_error", thumb_error
@@ -466,6 +499,7 @@ class CSVToDBConverter:
                 
                 video_url, video_error = self.validator.validate_url(str(row['videoUrl']))
                 if video_error:
+                    logger.debug(f"Row {row_index}: 影片URL驗證失敗 - {video_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "videoUrl",
                         str(row['videoUrl']), "format_error", video_error
@@ -476,6 +510,7 @@ class CSVToDBConverter:
                 # 驗證擷取時間
                 capture_time, capture_error = self.validator.validate_timestamp(str(row['資料擷取時間']))
                 if capture_error:
+                    logger.debug(f"Row {row_index}: 擷取時間驗證失敗 - {capture_error}")
                     self.error_logger.log_validation_error(
                         file_path, keyword, "comment", row_index, "資料擷取時間",
                         str(row['資料擷取時間']), "format_error", capture_error
@@ -493,6 +528,7 @@ class CSVToDBConverter:
                 valid_records += 1
                 
             except Exception as e:
+                logger.debug(f"Row {row_index}: 一般錯誤 - {e}")
                 self.error_logger.log_validation_error(
                     file_path, keyword, "comment", row_index, "general",
                     str(row), "format_error", str(e)
@@ -555,7 +591,8 @@ class CSVToDBConverter:
             return False
     
     def run(self, base_dir: str = ".", keyword: Optional[str] = None, 
-            move_processed: bool = False, generate_report: bool = True):
+            move_processed: bool = False, generate_report: bool = True,
+            specific_file: Optional[str] = None, file_type: Optional[str] = None):
         """
         執行轉換程序
         
@@ -564,6 +601,8 @@ class CSVToDBConverter:
             keyword: 關鍵字篩選
             move_processed: 是否移動已處理的檔案
             generate_report: 是否生成錯誤報告
+            specific_file: 指定要處理的檔案路徑
+            file_type: 指定檔案的類型 (product/snapshot/comment)
         """
         logger.info("開始CSV到資料庫轉換程序")
         
@@ -575,8 +614,39 @@ class CSVToDBConverter:
             # 初始化資料庫
             self.db_config.init_database()
             
-            # 掃描CSV檔案
-            csv_files = FileUtils.scan_csv_files(base_dir, keyword)
+            # 如果指定了特定檔案，則只處理該檔案
+            if specific_file:
+                logger.info(f"指定處理檔案: {specific_file}")
+                
+                # 檢查檔案是否存在
+                if not os.path.exists(specific_file):
+                    logger.error(f"指定的檔案不存在: {specific_file}")
+                    return
+                
+                # 如果沒有指定檔案類型，則自動判斷
+                if not file_type:
+                    file_type = self._detect_file_type(specific_file)
+                    logger.info(f"自動判斷檔案類型: {file_type}")
+                
+                # 從檔案名提取關鍵字
+                if not keyword:
+                    keyword = FileUtils.extract_keyword_from_filename(specific_file)
+                    logger.info(f"從檔案名提取關鍵字: {keyword}")
+                
+                # 建立檔案資訊
+                file_info = {
+                    'file_path': specific_file,
+                    'file_type': file_type,
+                    'keyword': keyword,
+                    'file_size': os.path.getsize(specific_file),
+                    'modified_time': datetime.fromtimestamp(os.path.getmtime(specific_file)),
+                    'created_time': datetime.fromtimestamp(os.path.getctime(specific_file))
+                }
+                
+                csv_files = [file_info]
+            else:
+                # 掃描CSV檔案
+                csv_files = FileUtils.scan_csv_files(base_dir, keyword)
             
             if not csv_files:
                 logger.warning("沒有找到需要處理的CSV檔案")
@@ -610,6 +680,29 @@ class CSVToDBConverter:
             raise
         finally:
             self.close_database()
+    
+    def _detect_file_type(self, file_path: str) -> str:
+        """
+        自動判斷檔案類型
+        
+        Args:
+            file_path: 檔案路徑
+            
+        Returns:
+            檔案類型 (product/snapshot/comment)
+        """
+        filename = os.path.basename(file_path)
+        
+        if filename.endswith('_商品資料.csv'):
+            return "product"
+        elif filename.endswith('_商品銷售快照.csv'):
+            return "snapshot"
+        elif '_商品留言資料_' in filename and filename.endswith('.csv'):
+            return "comment"
+        else:
+            # 預設為評論檔案
+            logger.warning(f"無法判斷檔案類型，預設為 comment: {filename}")
+            return "comment"
 
 def main():
     """主程式"""
@@ -624,6 +717,10 @@ def main():
                        help='不生成錯誤報告')
     parser.add_argument('--init-db', action='store_true',
                        help='只初始化資料庫表結構')
+    parser.add_argument('--file', type=str,
+                       help='指定要處理的檔案路徑 (例如: crawler/益生菌_商品留言資料_20250428144830.csv)')
+    parser.add_argument('--type', type=str, choices=['product', 'snapshot', 'comment'],
+                       help='指定檔案的類型 (product/snapshot/comment)')
     
     args = parser.parse_args()
     
@@ -643,7 +740,9 @@ def main():
             base_dir=args.base_dir,
             keyword=args.keyword,
             move_processed=args.move_processed,
-            generate_report=not args.no_report
+            generate_report=not args.no_report,
+            specific_file=args.file,
+            file_type=args.type
         )
         
     except KeyboardInterrupt:
