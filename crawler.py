@@ -184,7 +184,7 @@ def save_sales_snapshot_long_format():
         price = row['價格']
         link = row['商品連結']
 
-        latest_sales = get_current_sales(driver, link)
+        latest_sales = get_current_sales(product_id)
         if latest_sales is None:
             print(f"【警告】無法取得 {product_name} 的銷售數")
             latest_sales = 0
@@ -206,9 +206,8 @@ def save_sales_snapshot_long_format():
         return
 
     # 準備新快照資料表
-    df_snapshot = pd.DataFrame(all_rows, columns=[
-        '商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間'
-    ])
+    columns = ['商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間']
+    df_snapshot = pd.DataFrame(all_rows, columns=columns)  # type: ignore
 
     os.makedirs('crawler', exist_ok=True)
 
@@ -222,14 +221,14 @@ def save_sales_snapshot_long_format():
             df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
             new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
 
-            df_snapshot = new_records[df_snapshot.columns]
+            df_snapshot = new_records[df_snapshot.columns]  # type: ignore
             actual_new = len(df_snapshot)
             if actual_new == 0:
                 print("🚫 沒有新增的快照資料，跳過寫入")
                 return
             else:
                 print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
-                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)
+                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)  # type: ignore
         except Exception as e:
             print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
     else:
@@ -281,20 +280,45 @@ if (is_new_keyword):
         # 取得商品內容
         for block in driver.find_elements(by=By.XPATH, value='//div[contains(@class, "goodsUrl")]'):
             # 將整個網站的Html進行解析
-            soup = BeautifulSoup(block.get_attribute('innerHTML'), "html.parser")
+            inner_html = block.get_attribute('innerHTML')
+            if inner_html is None:
+                continue
+            soup = BeautifulSoup(inner_html, "html.parser")
 
-            tname = soup.select_one('.prdName').text.strip()
+            tname_elem = soup.select_one('.prdName')
+            if tname_elem is None:
+                print('抓不到商品名稱，直接跳過')
+                continue
+            tname = tname_elem.text.strip()
             if len(tname) <= 0:
                 print('抓不到資料，直接是空的')
                 continue # 沒抓到這個商品就別爬了  
-            tmpSales = soup.select_one('.totalSales').text.strip()
+            
+            tmpSales_elem = soup.select_one('.totalSales')
+            if tmpSales_elem is None:
+                print('抓不到銷售量，直接跳過')
+                continue
+            tmpSales = tmpSales_elem.text.strip()
             salseCount = str(extract_number(tmpSales)) + ("萬" if tmpSales.endswith("萬") else "")
             #if (salseCount is None or salseCount < 1000):
                 #continue # 銷售量小於1000就跳過  
-            tprice = soup.select_one('.price > b').text.strip()
-            tlink = soup.select_one('.goods-img-url').get('href')
+            
+            tprice_elem = soup.select_one('.price > b')
+            if tprice_elem is None:
+                print('抓不到價格，直接跳過')
+                continue
+            tprice = tprice_elem.text.strip()
+            
+            tlink_elem = soup.select_one('.goods-img-url')
+            if tlink_elem is None:
+                print('抓不到連結，直接跳過')
+                continue
+            tlink = tlink_elem.get('href')
+            if tlink is None:
+                print('抓不到連結href，直接跳過')
+                continue
             # 使用正規表達式匹配 i_code 的值
-            match = re.search(r'i_code=([^&]+)', tlink)
+            match = re.search(r'i_code=([^&]+)', str(tlink))
 
             i_code = ''
             # 獲取匹配到的值
@@ -424,7 +448,13 @@ for i in tqdm(range(len(getData))):
         current_time_str
     ])
 
-    count_str = tmpDetail.get("filterList")[0]['count']
+    filter_list = tmpDetail.get("filterList")
+    if filter_list is None or len(filter_list) == 0:
+        continue
+    first_filter = filter_list[0]
+    if first_filter is None or 'count' not in first_filter:
+        continue
+    count_str = first_filter['count']
     all_pages = extract_number(count_str) or 0
     loopCount = all_pages // 10 + (1 if all_pages % 10 > 0 else 0)
 
@@ -433,6 +463,8 @@ for i in tqdm(range(len(getData))):
             tmpDetail = get_goods_comments(product_id, cur_page=page)
             if tmpDetail is None:
                 continue
+        if tmpDetail is None:
+            continue
         itemDetail = tmpDetail.get("goodsCommentList")
         if not itemDetail:
             continue
@@ -516,9 +548,8 @@ if not all_rows:
     print("⚠ 無可寫入的快照資料")
 else:
     # 準備新快照資料表
-    df_snapshot = pd.DataFrame(all_rows, columns=[
-        '商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間'
-    ])
+    columns = ['商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間']
+    df_snapshot = pd.DataFrame(all_rows, columns=columns)  # type: ignore
 
     os.makedirs('crawler', exist_ok=True)
 
@@ -532,13 +563,13 @@ else:
             df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
             new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
 
-            df_snapshot = new_records[df_snapshot.columns]
+            df_snapshot = new_records[df_snapshot.columns]  # type: ignore
             actual_new = len(df_snapshot)
             if actual_new == 0:
                 print("🚫 沒有新增的快照資料，跳過寫入")
             else:
                 print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
-                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)
+                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)  # type: ignore
         except Exception as e:
             print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
     else:
