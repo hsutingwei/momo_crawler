@@ -303,6 +303,13 @@ class CSVToDBConverter:
                 df['資料擷取時間'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 logger.info("使用當前時間作為預設的資料擷取時間")
         
+        # 移除重複的留言ID
+        original_count = len(df)
+        df = df.drop_duplicates(subset=['留言ID'], keep='first')
+        removed_count = original_count - len(df)
+        if removed_count > 0:
+            logger.info(f"移除了 {removed_count} 筆重複的留言ID記錄")
+        
         # 驗證CSV結構
         expected_columns = FileUtils.get_expected_columns("comment")
         is_valid, errors = FileUtils.validate_csv_structure(df, expected_columns, "comment")
@@ -324,6 +331,8 @@ class CSVToDBConverter:
         
         # 批次處理資料
         comments_data = []
+        
+        logger.info(f"開始處理 {total_records} 筆記錄")
         
         for index, row in df.iterrows():
             try:
@@ -535,10 +544,22 @@ class CSVToDBConverter:
                 )
                 error_records += 1
         
+        logger.info(f"資料處理完成 - 總計: {total_records}, 有效: {valid_records}, 錯誤: {error_records}")
+        
         # 批次插入資料庫
         if comments_data:
-            inserted_count = self.db_ops.batch_insert_comments(comments_data)
-            logger.info(f"評論資料插入完成: {inserted_count} 筆")
+            logger.info(f"準備插入 {len(comments_data)} 筆評論資料")
+            try:
+                inserted_count = self.db_ops.batch_insert_comments(comments_data)
+                logger.info(f"評論資料插入完成: {inserted_count} 筆")
+            except Exception as e:
+                logger.error(f"批次插入評論資料時發生錯誤: {e}")
+                # 記錄前幾筆資料的詳細資訊
+                for i, comment_data in enumerate(comments_data[:3]):
+                    logger.error(f"Sample comment data {i}: {comment_data}")
+                raise
+        else:
+            logger.warning("沒有有效的評論資料需要插入")
         
         return total_records, valid_records, error_records
     
