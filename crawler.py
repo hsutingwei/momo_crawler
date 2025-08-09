@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import argparse
+from pandas.io.formats import console
 import requests
 import json
 import pandas as pd
@@ -19,14 +20,75 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 keyword = '口罩'
+# designate_dt = None
+designate_dt = '2025-07-11 1407'
+print(keyword)
+
+def parse_designate_minute(s: str) -> datetime:
+    """
+    解析指定時間字串為 datetime 物件
+    
+    Args:
+        s: 時間字串，格式為 YYYY-MM-DD HHmm
+        
+    Returns:
+        datetime 物件，秒設為 00
+        
+    Raises:
+        ValueError: 格式錯誤時拋出
+    """
+    try:
+        return datetime.strptime(s, '%Y-%m-%d %H%M')
+    except ValueError as e:
+        raise ValueError(f"時間格式錯誤: {s}，正確格式應為 YYYY-MM-DD HHmm，例如: 2025-07-11 1407") from e
+
+def parse_comment_datetime(s: str) -> datetime:
+    """
+    穩健解析 API 回傳的留言時間字串
+    
+    Args:
+        s: 留言時間字串，可能格式如 YYYY/MM/DD HH:MM:SS、YYYY-MM-DD HH:MM:SS 等
+        
+    Returns:
+        datetime 物件
+        
+    Raises:
+        ValueError: 無法解析時拋出
+    """
+    # 定義多種可能的時間格式
+    formats = [
+        '%Y/%m/%d %H:%M:%S',  # 2025/07/11 14:07:30
+        '%Y-%m-%d %H:%M:%S',  # 2025-07-11 14:07:30
+        '%Y/%m/%d %H:%M',     # 2025/07/11 14:07
+        '%Y-%m-%d %H:%M',     # 2025-07-11 14:07
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    
+    raise ValueError(f"無法解析留言時間: {s}")
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--keyword', type=str, help='搜尋關鍵字', default='益生菌')
+    p.add_argument('--keyword', type=str, help='搜尋關鍵字', default=None)
+    p.add_argument('--designate_capture_time', type=str, default=None,
+                   help='只抓取留言時間早於此時間（格式：YYYY-MM-DD HHmm），例如 2025-07-11 1407')
     return p.parse_args()
 
 args = parse_args()
 keyword = args.keyword
+
+# 解析指定時間（如果有的話）
+if args.designate_capture_time:
+    try:
+        designate_dt = parse_designate_minute(args.designate_capture_time)
+        print(f"設定留言時間篩選: 只抓取留言時間早於 {designate_dt.strftime('%Y-%m-%d %H:%M')} 的留言")
+    except ValueError as e:
+        print(f"錯誤: {e}")
+        exit(1)
 
 page = 60
 ecode = 'utf-8-sig'
@@ -470,6 +532,16 @@ for i in tqdm(range(len(getData))):
             continue
 
         for obj in itemDetail:
+            # 解析留言時間
+            try:
+                comment_dt = parse_comment_datetime(obj["date"])
+            except ValueError:
+                continue  # 解析失敗跳過該筆留言
+
+            # 若設定 designate_dt，則只保留 comment_dt < designate_dt
+            if designate_dt and not (comment_dt < designate_dt):
+                continue
+
             comment_id = str(obj["commentId"])
             if comment_id in existing_comment_ids:
                 continue  # Skip duplicates
@@ -498,7 +570,9 @@ for i in tqdm(range(len(getData))):
             data2[16].append(obj["score"])
             data2[17].append(obj["videoThumbnailImg"])
             data2[18].append(obj["videoUrl"])
-            data2[19].append(current_time_str)  # 資料擷取時間
+            # 資料擷取時間：如果有 designate_dt 則使用 designate_dt，否則使用 current_time_str
+            capture_time = designate_dt.strftime('%Y-%m-%d %H:%M:%S') if designate_dt else current_time_str
+            data2[19].append(capture_time)  # 資料擷取時間
 
         time.sleep(random.randint(2, 4))
 
