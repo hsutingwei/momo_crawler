@@ -3,6 +3,10 @@ import os
 import logging
 from psycopg2 import sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from dotenv import load_dotenv
+
+# 載入環境變數
+load_dotenv()
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +22,11 @@ class DatabaseConfig:
             'password': os.getenv('DB_PASSWORD', ''),
             'dbname': os.getenv('DB_NAME', 'momo_crawler'),
         }
+        
+        # 記錄連接設定（不包含密碼）
+        safe_config = self.config.copy()
+        safe_config['password'] = '***' if safe_config['password'] else 'None'
+        logger.info(f"資料庫連接設定: {safe_config}")
     
     def get_connection(self):
         """取得資料庫連接"""
