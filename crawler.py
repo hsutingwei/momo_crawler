@@ -18,6 +18,8 @@ import os
 from datetime import datetime
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from seleniumwire import webdriver
 
 def parse_designate_minute(s: str) -> datetime:
     """
@@ -37,9 +39,9 @@ def parse_designate_minute(s: str) -> datetime:
     except ValueError as e:
         raise ValueError(f"時間格式錯誤: {s}，正確格式應為 YYYY-MM-DD HHmm，例如: 2025-07-11 1407") from e
 
-keyword = '口罩'
+keyword = '維他命'
 # designate_dt = None
-designate_dt = parse_designate_minute('2025-07-11 1407')
+designate_dt = parse_designate_minute('2025-07-18 1330')
 
 def parse_comment_datetime(s: str) -> datetime:
     """
@@ -60,6 +62,8 @@ def parse_comment_datetime(s: str) -> datetime:
         '%Y-%m-%d %H:%M:%S',  # 2025-07-11 14:07:30
         '%Y/%m/%d %H:%M',     # 2025/07/11 14:07
         '%Y-%m-%d %H:%M',     # 2025-07-11 14:07
+        '%Y-%m-%d',
+        '%Y/%m/%d',
     ]
     
     for fmt in formats:
@@ -259,7 +263,7 @@ def save_sales_snapshot_long_format():
             link,
             current_time_str
         ])
-        time.sleep(random.uniform(1, 2.2))
+        time.sleep(random.uniform(0.5, 1.2))
 
     driver.quit()
 
@@ -299,7 +303,7 @@ def save_sales_snapshot_long_format():
         print(f"✅ 首次建立快照檔，寫入 {len(df_snapshot)} 筆")
 
 # 自動下載ChromeDriver
-service = ChromeService(executable_path=ChromeDriverManager().install())
+# service = ChromeService(executable_path=ChromeDriverManager().install())
 
 # 關閉通知提醒
 options = webdriver.ChromeOptions()
@@ -309,7 +313,7 @@ options.add_experimental_option("prefs",prefs)
 # options.add_argument('blink-settings=imagesEnabled=false') 
 
 # 開啟瀏覽器
-driver = webdriver.Chrome(service=service, chrome_options=options)
+driver = webdriver.Chrome(service=Service(), chrome_options=options)
 time.sleep(random.randint(5,10))
 
 # 開啟網頁，進到首頁
@@ -333,11 +337,11 @@ if (is_new_keyword):
     for i in tqdm(range(int(page))):
     #for i in tqdm(range(1)):
         driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
-        time.sleep(random.randint(2,4))
+        time.sleep(random.uniform(0.8, 1.5))
         # 滾動頁面
         for scroll in range(6):
             driver.execute_script('window.scrollBy(0,1000)')
-            time.sleep(random.randint(2,3))
+            time.sleep(random.uniform(1.2, 2))
         
         # 取得商品內容
         for block in driver.find_elements(by=By.XPATH, value='//div[contains(@class, "goodsUrl")]'):
@@ -401,7 +405,7 @@ if (is_new_keyword):
             sales.append(salseCount)
 
 
-        time.sleep(random.randint(2,4)) # 休息久一點
+        time.sleep(random.uniform(1.5, 2))
 
     # 先將每頁抓到的商品儲存下來，方便後續追蹤並爬蟲
     dic = {
@@ -430,7 +434,7 @@ tStart = time.time()
 
 # 當前爬蟲時間作為檔名用
 # 資料擷取時間：如果有 designate_dt 則使用 designate_dt，否則使用 current_time_str
-capture_time = designate_dt.strftime('%Y-%m-%d %H:%M:%S') if designate_dt else current_time_str
+capture_time = designate_dt.strftime('%Y%m%d%H%M%S') if designate_dt else current_time_str
 comments_file_path = f'crawler/{keyword}_商品留言資料_{capture_time}.csv'
 
 # 嘗試讀取過去已爬留言ID，避免重複爬取
@@ -577,10 +581,10 @@ for i in tqdm(range(len(getData))):
             data2[17].append(obj["videoThumbnailImg"])
             data2[18].append(obj["videoUrl"])
             # 資料擷取時間：如果有 designate_dt 則使用 designate_dt，否則使用 current_time_str
-            capture_time = designate_dt.strftime('%Y-%m-%d %H:%M:%S') if designate_dt else current_time_str
+            capture_time = designate_dt.strftime('%Y%m%d%H%M%S') if designate_dt else current_time_str
             data2[19].append(capture_time)  # 資料擷取時間
 
-        time.sleep(random.randint(2, 4))
+        time.sleep(random.uniform(0.5, 1.2))
 
 # 儲存新留言資料（以新檔案儲存）
 dic = {
