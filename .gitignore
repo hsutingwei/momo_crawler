@@ -20,3 +20,9 @@ Thumbs.db
 # Env
 .env
 .env.*
+
+error_report_*.txt
+clean_decimal_report_*.csv
+fix_decreasing_report_*.csv
+sales_changes_analysis_*.csv
+*_商品資料.csv
