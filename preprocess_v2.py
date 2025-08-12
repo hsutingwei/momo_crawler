@@ -32,11 +32,11 @@ if USE_CKIP:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--keyword', type=str, default='益生菌', help='搜尋關鍵字')
+    p.add_argument('--keyword', type=str, default='', help='搜尋關鍵字')
     return p.parse_args()
 
 args = parse_args()
-keyword = args.keyword
+keyword = args.keyword or '益生菌'
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIR_CRAWLER = os.path.join(ROOT, 'crawler')
@@ -88,8 +88,10 @@ WS = None
 POS = None
 if USE_CKIP:
     # 預設載 GPU=False；若你要 GPU：CkipWordSegmenter(device=0)
-    WS = CkipWordSegmenter(level=3, device=-1)
-    POS = CkipPosTagger(level=3, device=-1)
+    print("Initializing drivers ... WS")
+    WS = CkipWordSegmenter(model="bert-base", device=0)
+    print("Initializing drivers ... POS")
+    POS = CkipPosTagger(model="bert-base", device=0)
 
 def simple_tokenize(s: str) -> Tuple[List[str], List[str]]:
     """
