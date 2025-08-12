@@ -105,26 +105,36 @@ def fetch_candidate_comment_ids(cur, corpus_type: str, corpus_key: Optional[str]
 
 
 def ensure_vocab(cur, pipeline_version: str, tokens: Iterable[str]) -> Dict[str, int]:
-    """批量 upsert token 到 tfidf_vocab，回傳 token->term_id"""
-    toks = list(set(t for t in tokens if t))
+    toks = list({t for t in tokens if t})
     if not toks:
         return {}
-    # 批量插入（忽略衝突）
-    pgx.execute_values(cur, """
+
+    # 1) 批量 upsert 新詞進 vocab
+    pgx.execute_values(
+        cur,
+        """
         INSERT INTO tfidf_vocab (token, pipeline_version)
         VALUES %s
         ON CONFLICT (token, pipeline_version) DO NOTHING
-    """, [(t, pipeline_version) for t in toks], page_size=1000)
+        """,
+        [(t, pipeline_version) for t in toks],
+        page_size=1000
+    )
 
-    # 查出 term_id
-    pgx.execute_values(cur, """
-        SELECT token, term_id FROM tfidf_vocab
-        WHERE pipeline_version=%s AND token IN %s
-    """, [(pipeline_version, tuple(toks))], template=None, page_size=1000)
-    mapping: Dict[str, int] = {}
-    for token, term_id in cur.fetchall():
-        mapping[token] = term_id
+    # 2) 把 token -> term_id 查回來
+    # 建議用 ANY(array)；若你偏好 IN，也可以用 tuple：IN %s, (tuple(toks),)
+    cur.execute(
+        """
+        SELECT token, term_id
+        FROM tfidf_vocab
+        WHERE pipeline_version = %s
+          AND token = ANY(%s)
+        """,
+        (pipeline_version, toks)  # toks 會被轉成 array
+    )
+    mapping = {token: term_id for token, term_id in cur.fetchall()}
     return mapping
+
 
 
 def get_existing_terms_for_doc(cur, comment_id: str, corpus_id: int) -> List[int]:
