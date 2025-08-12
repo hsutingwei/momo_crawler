@@ -35,16 +35,44 @@ class SalesDecimalCleaner:
     def find_snapshot_files(self) -> List[str]:
         """尋找所有快照檔案"""
         snapshot_files = []
-        crawler_dir = '../crawler'
         
-        if os.path.exists(crawler_dir):
-            for file in os.listdir(crawler_dir):
-                if file.endswith('_商品銷售快照.csv') and not file.endswith('_backup_'):
-                    snapshot_files.append(os.path.join(crawler_dir, file))
+        # 檢查多個可能的路徑
+        possible_paths = ['crawler', '../crawler', './crawler']
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                for file in os.listdir(path):
+                    if file.endswith('_商品銷售快照.csv') and not file.endswith('_backup_'):
+                        snapshot_files.append(os.path.join(path, file))
+                break
         
         return snapshot_files
     
-    def clean_sales_number(self, sales_str: str) -> str:
+    def read_csv_with_encoding(self, file_path: str) -> pd.DataFrame:
+        """嘗試多種編碼讀取CSV檔案"""
+        encodings = ['utf-8', 'big5', 'gbk', 'gb2312', 'utf-8-sig']
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, dtype={'商品ID': str}, encoding=encoding)
+                logger.info(f"成功使用 {encoding} 編碼讀取檔案: {file_path}")
+                return df
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                logger.warning(f"使用 {encoding} 編碼讀取檔案時發生錯誤: {e}")
+                continue
+        
+        # 如果所有編碼都失敗，嘗試不指定編碼
+        try:
+            df = pd.read_csv(file_path, dtype={'商品ID': str})
+            logger.info(f"使用預設編碼成功讀取檔案: {file_path}")
+            return df
+        except Exception as e:
+            logger.error(f"無法讀取檔案 {file_path}: {e}")
+            raise
+    
+    def clean_sales_number(self, sales_str) -> str:
         """清理銷售數量，移除小數點"""
         if pd.isna(sales_str) or sales_str == '':
             return ''
@@ -78,8 +106,8 @@ class SalesDecimalCleaner:
         logger.info(f"開始清理: {snapshot_path}")
         
         try:
-            # 讀取快照檔案
-            df = pd.read_csv(snapshot_path, dtype={'商品ID': str})
+            # 讀取快照檔案，嘗試多種編碼
+            df = self.read_csv_with_encoding(snapshot_path)
             original_count = len(df)
             
             # 記錄修正的記錄
@@ -158,7 +186,7 @@ class SalesDecimalCleaner:
         logger.info(f"預覽清理: {snapshot_path}")
         
         try:
-            df = pd.read_csv(snapshot_path, dtype={'商品ID': str})
+            df = self.read_csv_with_encoding(snapshot_path)
             
             # 記錄需要清理的記錄
             records_to_clean = []

@@ -36,11 +36,11 @@ def parse_args():
     return p.parse_args()
 
 args = parse_args()
-keyword = args.keyword or '益生菌'
+keyword = args.keyword or '口罩'
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIR_CRAWLER = os.path.join(ROOT, 'crawler')
-DIR_PRE = os.path.join(ROOT, 'preprocess_v2')
+DIR_PRE = os.path.join(ROOT, 'preprocess_v2', keyword)
 os.makedirs(DIR_PRE, exist_ok=True)
 
 ENCODING = 'utf-8-sig'

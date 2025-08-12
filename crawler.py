@@ -41,7 +41,7 @@ def parse_designate_minute(s: str) -> datetime:
 
 keyword = '維他命'
 # designate_dt = None
-designate_dt = parse_designate_minute('2025-07-18 1330')
+designate_dt = parse_designate_minute('2025-07-25 1303')
 
 def parse_comment_datetime(s: str) -> datetime:
     """

@@ -48,21 +48,49 @@ class SalesChangesAnalyzer:
         """尋找所有快照CSV檔案"""
         snapshot_files = []
         
-        # 檢查 crawler 目錄
-        if os.path.exists('../crawler'):
-            for file in os.listdir('../crawler'):
-                if file.endswith('_商品銷售快照.csv') and not file.endswith('.bak'):
-                    snapshot_files.append(os.path.join('../crawler', file))
+        # 檢查多個可能的路徑
+        possible_paths = ['crawler', '../crawler', './crawler']
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                for file in os.listdir(path):
+                    if file.endswith('_商品銷售快照.csv') and not file.endswith('.bak'):
+                        snapshot_files.append(os.path.join(path, file))
+                break
         
         return sorted(snapshot_files)
+    
+    def read_csv_with_encoding(self, file_path: str) -> pd.DataFrame:
+        """嘗試多種編碼讀取CSV檔案"""
+        encodings = ['utf-8', 'big5', 'gbk', 'gb2312', 'utf-8-sig']
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, dtype={'商品ID': str}, encoding=encoding)
+                logger.info(f"成功使用 {encoding} 編碼讀取檔案: {file_path}")
+                return df
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                logger.warning(f"使用 {encoding} 編碼讀取檔案時發生錯誤: {e}")
+                continue
+        
+        # 如果所有編碼都失敗，嘗試不指定編碼
+        try:
+            df = pd.read_csv(file_path, dtype={'商品ID': str})
+            logger.info(f"使用預設編碼成功讀取檔案: {file_path}")
+            return df
+        except Exception as e:
+            logger.error(f"無法讀取檔案 {file_path}: {e}")
+            raise
     
     def analyze_single_file(self, file_path: str) -> List[Dict]:
         """分析單一快照檔案"""
         logger.info(f"分析檔案: {file_path}")
         
         try:
-            # 讀取CSV檔案
-            df = pd.read_csv(file_path, dtype={'商品ID': str})
+            # 讀取CSV檔案，嘗試多種編碼
+            df = self.read_csv_with_encoding(file_path)
             
             # 提取關鍵字
             filename = os.path.basename(file_path)
@@ -212,14 +240,14 @@ def main():
     if not df_changes.empty:
         # 如果指定了關鍵字，進行篩選
         if args.keyword:
-            df_changes = df_changes[df_changes['keyword'] == args.keyword]
+            df_changes = df_changes[df_changes['keyword'] == args.keyword].copy()
             if df_changes.empty:
                 logger.info(f"關鍵字 '{args.keyword}' 沒有找到銷售變化")
                 return
             logger.info(f"篩選關鍵字 '{args.keyword}' 後，找到 {len(df_changes)} 筆變化")
         
         # 儲存結果
-        analyzer.save_results(df_changes, args.output)
+        analyzer.save_results(df_changes, args.output if args.output else None)
     else:
         logger.info("沒有找到任何銷售變化")
 

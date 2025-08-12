@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import argparse
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import re
 
@@ -23,23 +23,31 @@ class SalesFormatAnalyzer:
     def __init__(self):
         self.issues_data = []
         
-    def extract_number_and_unit(self, sales_str: str) -> Tuple[int, str]:
+    def extract_number_and_unit(self, sales_str) -> Tuple[int, str]:
         """從銷售字串中提取數字和單位"""
         if pd.isna(sales_str) or sales_str == '':
             return 0, ''
         
-        if isinstance(sales_str, str):
-            # 檢查是否包含萬字
-            if '萬' in sales_str:
-                # 提取數字部分
-                match = re.search(r'(\d+(?:\.\d+)?)', sales_str)
-                if match:
-                    return int(float(match.group(1)) * 10000), '萬'
-            else:
-                # 直接提取數字
-                match = re.search(r'(\d+)', sales_str)
-                if match:
-                    return int(match.group(1)), ''
+        # 轉換為字串
+        sales_str = str(sales_str)
+        
+        # 檢查是否包含萬字
+        if '萬' in sales_str:
+            # 提取數字部分
+            match = re.search(r'(\d+(?:\.\d+)?)', sales_str)
+            if match:
+                # 確保整數結果，避免小數點
+                num = float(match.group(1))
+                if num.is_integer():
+                    return int(num * 10000), '萬'
+                else:
+                    # 如果有小數，轉換為整數萬
+                    return int(num * 10000), '萬'
+        else:
+            # 直接提取數字
+            match = re.search(r'(\d+)', sales_str)
+            if match:
+                return int(match.group(1)), ''
         
         return 0, ''
     
@@ -90,7 +98,7 @@ class SalesFormatAnalyzer:
                         })
                     
                     # 檢查格式不一致的問題
-                    issues.extend(self.check_format_issues(product_id, group_sorted, sales_records, keyword, file_path))
+                    issues.extend(self.check_format_issues(str(product_id), group_sorted, sales_records, keyword, file_path))
             
             logger.info(f"在 {keyword} 中找到 {len(issues)} 筆格式問題")
             return issues
@@ -192,7 +200,7 @@ class SalesFormatAnalyzer:
         logger.info(f"總共找到 {len(df_issues)} 筆格式問題記錄")
         return df_issues
     
-    def save_results(self, df: pd.DataFrame, output_file: str = None):
+    def save_results(self, df: pd.DataFrame, output_file: Optional[str] = None):
         """儲存結果"""
         if df.empty:
             logger.warning("沒有資料可儲存")
