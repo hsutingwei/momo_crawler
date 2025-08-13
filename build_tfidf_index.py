@@ -22,11 +22,19 @@ python build_tfidf_index.py --pipeline-version ckip-pre-v1 --corpus-type keyword
 # 先測 100 篇、每 200 篇提交一次
 python build_tfidf_index.py --pipeline-version ckip-pre-v1 --corpus-type keyword --corpus-key 益生菌 --limit 100 --batch 200
 
+# 預設只忽略 ';'
+python build_tfidf_index.py --pipeline-version ckip-pre-v1 --corpus-type global
+
+# 忽略多個符號：分號；全形分號；逗號；頓號
+python build_tfidf_index.py --pipeline-version ckip-pre-v1 --corpus-type global \
+  --ignore-delims ';' '；' ',' '、'
+
 """
 
 import os
 import sys
 import argparse
+import re
 from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Iterable, Optional, Set
 
@@ -215,20 +223,39 @@ def bump_total_docs(cur, corpus_id: int, n: int) -> None:
     """, (n, corpus_id))
 
 
-def fetch_tokens_for_comment(cur, comment_id: str, pipeline_version: str, stopwords: Set[str]) -> List[str]:
+def fetch_tokens_for_comment(
+    cur,
+    comment_id: str,
+    pipeline_version: str,
+    stopwords: Set[str],
+    ignore_delims: Set[str],
+    drop_punct: bool = True
+) -> List[str]:
     cur.execute("""
         SELECT token FROM comment_tokens
         WHERE comment_id=%s AND pipeline_version=%s
         ORDER BY token_order
     """, (comment_id, pipeline_version))
     toks = [r[0] for r in cur.fetchall()]
+
+    # 1) 丟掉分隔符號（由參數控制）
+    if ignore_delims:
+        toks = [t for t in toks if t not in ignore_delims]
+
+    # 2) 可選：丟掉純符號 token（例如 "!"、"…"）
+    if drop_punct:
+        toks = [t for t in toks if t and not PUNCT_RE.match(t)]
+
+    # 3) 停用詞（你現有流程也會載入）
     if stopwords:
         toks = [t for t in toks if t not in stopwords]
+
     return toks
 
 
-def run(corpus_type: str, pipeline_version: str, corpus_key: Optional[str], only_missing: bool,
-        limit: Optional[int], batch: int) -> None:
+def run(corpus_type: str, pipeline_version: str, corpus_key: Optional[str],
+        only_missing: bool, limit: Optional[int], batch: int,
+        ignore_delims: Set[str]) -> None:
     db = DatabaseConfig()
     conn = db.get_connection()
     conn.autocommit = False
@@ -254,7 +281,7 @@ def run(corpus_type: str, pipeline_version: str, corpus_key: Optional[str], only
 
         for idx, cid in enumerate(comment_ids, 1):
             # 取 tokens
-            tokens = fetch_tokens_for_comment(cur, cid, pipeline_version, stopwords)
+            tokens = fetch_tokens_for_comment(cur, cid, pipeline_version, stopwords, ignore_delims)
             if not tokens:
                 # 這篇沒有 tokens，跳過（若之前有索引，應該也撤銷；此處簡化略過）
                 continue
@@ -308,12 +335,13 @@ def main():
     ap.add_argument("--only-missing", action="store_true", help="只建立尚未索引過的文件")
     ap.add_argument("--limit", type=int, help="只處理前 N 篇（測試用）")
     ap.add_argument("--batch", type=int, default=500, help="每處理多少篇提交一次交易")
+    ap.add_argument("--ignore-delims", nargs="*", default=[";"], help="在計算 TF-IDF 時要忽略的分隔符號，空白分隔多個，預設為 ';'")
     args = ap.parse_args()
 
     if args.corpus_type == "keyword" and not args.corpus_key:
         ap.error("--corpus-key 在 corpus-type=keyword 時必填")
 
-    run(args.corpus_type, args.pipeline_version, args.corpus_key, args.only_missing, args.limit, args.batch)
+    run(args.corpus_type, args.pipeline_version, args.corpus_key, args.only_missing, args.limit, args.batch, ignore_delims=set(args.ignore_delims or []))
 
 
 if __name__ == "__main__":
