@@ -199,11 +199,11 @@ def increment_df(cur, corpus_id: int, term_ids: Iterable[int]) -> None:
     if not term_ids:
         return
     pgx.execute_values(cur, """
-        INSERT INTO tfidf_doc_freq (corpus_id, term_id, df, updated_at)
+        INSERT INTO tfidf_doc_freq (corpus_id, term_id, df)
         VALUES %s
         ON CONFLICT (corpus_id, term_id)
-        DO UPDATE SET df = tfidf_doc_freq.df + 1, updated_at=NOW()
-    """, [(corpus_id, tid, 1, None) for tid in term_ids], page_size=1000)
+        DO UPDATE SET df = tfidf_doc_freq.df + 1, updated_at = NOW()
+    """, [(corpus_id, tid, 1) for tid in term_ids], page_size=1000)
 
 
 def bump_total_docs(cur, corpus_id: int, n: int) -> None:
