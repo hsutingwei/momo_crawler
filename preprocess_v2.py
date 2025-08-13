@@ -36,7 +36,7 @@ def parse_args():
     return p.parse_args()
 
 args = parse_args()
-keyword = args.keyword or '口罩'
+keyword = args.keyword or '益生菌'
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIR_CRAWLER = os.path.join(ROOT, 'crawler')
@@ -112,6 +112,30 @@ def ckip_tokenize(s: str) -> Tuple[List[str], List[str]]:
     ws = WS([s])[0]
     pos = POS([ws])[0]
     return ws, pos
+
+# 保留中文字，其他替換成分隔符
+def sanitize_chinese(text, seg_char = ';'):
+    """
+    去除非中文符號，把非中文替還成 ';'。
+    此動作可保留所有漢字符號，除了繁體字，簡體字、再簡字、三簡字等，亞洲國家的漢字也會保留，例如日文漢字等國家的漢字都會保留
+
+    :param str text: 來源字串
+    :param str str: 替換符號
+    :return str: 替換後結果
+    """
+    text = re.sub(r'[^\u3400-\u9fcc\uf900-\ufa2d\u3041-\u3129\uff66-\uff9f]+', seg_char, text)
+    text = re.sub(r'[[]-?() \f\n\r\t\v:ο\';×~+&!"_#`『』˙>\/%<β=÷*€ˊιμ$ˇ°χˋˍλ}¯@| {επδθ±§ ^αγ  ·,.:：﹕;；<>《》︽︾＜＞「」［］　『』【】〔〕︹︺︻︼﹁﹂﹃﹄［］﹝﹞＼／﹨∕？﹖、‘’′｜∣∥↖↘↗↙︱︳︴↑↓－¯〈〉?[{]}\|!`~@#$%^&*()-=_+┬┴├─┼┤┌┐╞═╪╡│▕└┘╭╮╰╯╔╦╗╠═╬╣╓╥╖╒╤╕║╚╩╝╟╫╢╙╨╜╞╪╡╘╧╛＿ˍ▁▂▃▄▅▆▇█▏▎▍▌▋▊▉◢', seg_char, text)
+    text = re.sub(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪❶❷❸❹❺❻❼❽❾❿⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩㊀㊁㊂㊃㊄㊅㊆㊇㊈㊉１２３４５６７８９０ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ⒜⒝⒞⒟⒠⒡⒢⒣⒤⒥⒦⒧⒨⒩⒪⒫⒬⒭⒮⒯⒰⒱⒲⒳⒴⒵￥￡€￠¥〔〕【】﹝﹞〈〉﹙﹚《》（）｛｝﹛﹜︵︶︷︸︹︺︻︼︽︾︿﹀＜＞∩∪≒≌∵∴×／﹣±≦≧﹤﹥≠≡¼½¾³²∞√㏒∷°÷ˇ㏑∫∮∠∟⊿＋﹢⊥╳⊾℅㎎㎏㎜㎝㎞㎡㏄㏎㏕℃℉‰˙ˊˇˋ\u3105-\u3129]+', seg_char, text)
+    text = re.sub(r'[ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ]+', seg_char, text)
+    text = re.sub(r'[' + seg_char + ']+', seg_char, text)
+
+    # 移除字串開頭和結尾的逗號
+    if text.startswith(seg_char):
+        text = text[1:]
+    if text.endswith(seg_char):
+        text = text[:-1]
+
+    return text
 
 # -------- 數值/單位/幣值 規一 --------
 # 幣值單位（台灣）：元/塊/圓，角/毛=0.1 元，分=0.01 元
@@ -296,6 +320,9 @@ def process_file(src_csv: str, ts: str, keyword: str):
             # 留言文本：做正規化，但不刪英文/數字
             raw_comment = row[5] if len(row) > 5 else ''
             norm_text = normalize_text(raw_comment)
+
+            # 保留中文字，其他替換成分隔符
+            norm_text = sanitize_chinese(norm_text)
 
             # 斷詞
             tokens, poses = ckip_tokenize(norm_text)
