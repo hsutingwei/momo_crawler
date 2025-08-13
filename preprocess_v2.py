@@ -9,7 +9,7 @@ CKIP 版前處理：
    - preprocess/pre_<keyword>_<ts>_norm.csv        （新增 norm_text 欄位）
    - preprocess/pre_<keyword>_<ts>_tokens.jsonl    （每列包含 tokens/pos/numeric_mentions）
 用法：
-    python preprocess_ckip.py --keyword "益生菌"
+    python preprocess_v2.py --keyword "益生菌"
 """
 
 import os
