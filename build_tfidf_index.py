@@ -38,6 +38,8 @@ import re
 from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Iterable, Optional, Set
 
+PUNCT_RE = re.compile(r'^[\W_]+$', re.UNICODE)  # 純符號（如全是標點/底線）
+
 from dotenv import load_dotenv
 load_dotenv()
 
