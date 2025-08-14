@@ -55,9 +55,10 @@ def get_or_create_corpus(cur, corpus_type: str, corpus_key: Optional[str], pipel
     cur.execute("""
         INSERT INTO tfidf_corpus (corpus_type, corpus_key, pipeline_version, total_docs)
         VALUES (%s, %s, %s, 0)
-        ON CONFLICT (corpus_type, corpus_key, pipeline_version) DO NOTHING
+        ON CONFLICT ON CONSTRAINT tfidf_corpus_unique_nnd DO NOTHING
         RETURNING corpus_id
     """, (corpus_type, corpus_key, pipeline_version))
+
     row = cur.fetchone()
     if row:
         return row[0]
@@ -261,6 +262,10 @@ def run(corpus_type: str, pipeline_version: str, corpus_key: Optional[str],
     db = DatabaseConfig()
     conn = db.get_connection()
     conn.autocommit = False
+
+    if corpus_type == "global" and not corpus_key:
+        corpus_key = "__GLOBAL__"
+
 
     try:
         cur = conn.cursor()
