@@ -36,11 +36,20 @@ class DataValidator:
         驗證銷售數量格式
         支援格式: "1,234", "1,234萬", "1234", "1.5萬"
         """
-        if not sales_str or str(sales_str).strip() == '':
-            return None, None, "銷售數量為空值"
+        # 空值或常見缺值
+        if sales_str is None:
+            return 0, '個', "銷售數量為空值"
+
+        s = str(sales_str).strip()
+        if s == "" or s in {"-", "--", "N/A", "n/a", "null", "None"}:
+            return 0, '個', "銷售數量為空值"
         
         try:
             sales_str = str(sales_str).strip()
+            # 全形→半形；統一標點與空白
+            trans = str.maketrans("０１２３４５６７８９，．。　 ", "0123456789,. . ")
+            sales_str = sales_str.translate(trans)
+            sales_str = sales_str.replace(" ", "")
             
             # 處理 "萬" 單位
             if '萬' in sales_str:
