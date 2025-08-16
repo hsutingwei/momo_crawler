@@ -19,7 +19,7 @@ from tqdm import tqdm
 from scipy.sparse import hstack, csr_matrix
 from scipy.sparse import save_npz
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, precision_recall_fscore_support
 
 # ----- 嘗試載入 LightGBM（可 GPU），失敗就跳過 -----
 try:
@@ -87,16 +87,68 @@ def select_features_by_lgbm(X_train: csr_matrix, y_train: pd.Series,
     top_idx = order[:max(1, min(top_k, max(1, int((importances > 0).sum()))))]
     return X_train[:, top_idx], X_test[:, top_idx], top_idx
 
+def get_positive_score(model, X):
+    """優先用 predict_proba 的正類機率；不行就用 decision_function 分數；最後退回預測值(0/1)。"""
+    try:
+        proba = model.predict_proba(X)
+        if proba.shape[1] == 2:
+            return proba[:, 1]
+        # multinomial 保底：取最後一欄當正類（不太會用到）
+        return proba[:, -1]
+    except Exception:
+        try:
+            score = model.decision_function(X)
+            return score  # roc_auc_score 可直接用 margin 分數
+        except Exception:
+            # 最保底：0/1
+            return model.predict(X)
 
-def evaluate(y_true, y_pred) -> dict:
-    return {
+def evaluate(y_true, y_pred, y_score) -> dict:
+    # 整體
+    metrics = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "f1_macro": float(f1_score(y_true, y_pred, average="macro")),
         "f1_weighted": float(f1_score(y_true, y_pred, average="weighted")),
-        "precision_macro": float(precision_score(y_true, y_pred, average="macro")),
-        "recall_macro": float(recall_score(y_true, y_pred, average="macro")),
+        "precision_macro": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
+        "recall_macro": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
     }
 
+    # 整體 ROC-AUC（僅二分類）
+    try:
+        metrics["auc"] = float(roc_auc_score(y_true, y_score))
+    except Exception:
+        metrics["auc"] = float("nan")
+
+    # 類別別（labels=[0,1] 的順序）
+    p, r, f1, support = precision_recall_fscore_support(
+        y_true, y_pred, labels=[0, 1], zero_division=0
+    )
+    # p[0]/r[0]/f1[0] 對應類別0；p[1]/r[1]/f1[1] 對應類別1
+    metrics.update({
+        "precision_0": float(p[0]),
+        "recall_0": float(r[0]),
+        "f1_0": float(f1[0]),
+        "support_0": int(support[0]),
+        "precision_1": float(p[1]),
+        "recall_1": float(r[1]),
+        "f1_1": float(f1[1]),
+        "support_1": int(support[1]),
+    })
+
+    # 類別別 AUC（one-vs-rest）：對 1 的 AUC 與整體 AUC 相同，對 0 的 AUC = 1 - AUC(1) 只有在完美對稱時才成立；
+    # 因此用顯式 one-vs-rest 作法：
+    try:
+        auc_1 = roc_auc_score(y_true, y_score)           # 1 vs rest
+        auc_0 = roc_auc_score(1 - y_true, 1 - y_score)   # 0 vs rest
+    except Exception:
+        auc_0 = float("nan")
+        auc_1 = float("nan")
+
+    metrics.update({
+        "auc_0": float(auc_0),
+        "auc_1": float(auc_1),
+    })
+    return metrics
 
 def output_results(X_dense_df, X_tfidf, y, meta, vocab, args):
         # === 將訓練集產出存檔到 Model/load_training/ ===
@@ -245,7 +297,7 @@ def main():
     models.append((
         "XGBoost",
         xgb.XGBClassifier(
-            tree_method="gpu_hist",      # 有 GPU 就用，沒有會報警告；必要時改 cpu_hist
+            tree_method="gpu_hist",
             predictor="gpu_predictor",
             n_estimators=800,
             learning_rate=0.05,
@@ -286,8 +338,9 @@ def main():
 
             model.fit(Xtr, y_train)
             y_pred = model.predict(Xte)
+            y_score = get_positive_score(model, Xte)
+            metrics = evaluate(y_test, y_pred, y_score)
 
-            metrics = evaluate(y_test, y_pred)
             row = {
                 "fs_method": fs_name,
                 "model": model_name,
@@ -302,7 +355,7 @@ def main():
 
     df_results = pd.DataFrame(results).sort_values(["fs_method", "model"])
     base = args.out
-    df_results.to_csv(f"{base}.csv", index=False)
+    df_results.to_csv(f"{base}.csv", index=False, encoding="utf-8-sig")
     with open(f"{base}.json", "w", encoding="utf-8-sig") as f:
         json.dump(df_results.to_dict(orient="records"), f, ensure_ascii=False, indent=2)
 
