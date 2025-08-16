@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8-sig -*-
 """
 Model/train.py
 三模型( SVM / LightGBM / XGBoost ) × 兩種特徵選取(無 / 基於 LGBM 重要度)
@@ -15,7 +15,7 @@ import argparse
 import warnings
 import numpy as np
 import pandas as pd
-
+from tqdm import tqdm
 from scipy.sparse import hstack, csr_matrix
 from scipy.sparse import save_npz
 from sklearn.preprocessing import StandardScaler
@@ -125,7 +125,8 @@ def output_results(X_dense_df, X_tfidf, y, meta, vocab, args):
 
     # 1) X_dense
     X_dense_path = os.path.join(out_root, f"{prefix}_Xdense.csv")
-    X_dense_df.to_csv(X_dense_path, index=False, encoding="utf-8")
+    X_dense_df.to_csv(X_dense_path, index=False, encoding="utf-8-sig")
+
 
     # 2) X_tfidf (sparse)
     X_tfidf_path = os.path.join(out_root, f"{prefix}_Xtfidf.npz")
@@ -133,15 +134,15 @@ def output_results(X_dense_df, X_tfidf, y, meta, vocab, args):
 
     # 3) y
     y_path = os.path.join(out_root, f"{prefix}_y.csv")
-    pd.DataFrame({"y": y.astype(int)}).to_csv(y_path, index=False, encoding="utf-8")
+    pd.DataFrame({"y": y.astype(int)}).to_csv(y_path, index=False, encoding="utf-8-sig")
 
     # 4) meta
     meta_path = os.path.join(out_root, f"{prefix}_meta.csv")
-    meta.to_csv(meta_path, index=False, encoding="utf-8")
+    meta.to_csv(meta_path, index=False, encoding="utf-8-sig")
 
     # 5) vocab
     vocab_path = os.path.join(out_root, f"{prefix}_vocab.txt")
-    with open(vocab_path, "w", encoding="utf-8") as f:
+    with open(vocab_path, "w", encoding="utf-8-sig") as f:
         for tok in vocab:
             f.write(f"{tok}\n")
 
@@ -169,7 +170,7 @@ def output_results(X_dense_df, X_tfidf, y, meta, vocab, args):
         },
     }
     manifest_path = os.path.join(out_root, f"{prefix}_manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    with open(manifest_path, "w", encoding="utf-8-sig") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     print(f"[DUMP] training set saved under: {out_root}")
@@ -217,28 +218,28 @@ def main():
     models = []
 
     # 5.1 SVM
-    if HAS_CUML:
-        models.append(("SVM-GPU(cuML)", cuSVC(probability=True)))
-    else:
-        # sklearn.SVC 預設 RBF kernel 需要 dense；預測時我會自動 densify
-        models.append(("SVM-CPU(sklearn)", skSVC(probability=True, kernel="rbf")))
+    # if HAS_CUML:
+    #     models.append(("SVM-GPU(cuML)", cuSVC(probability=True)))
+    # else:
+    #     # sklearn.SVC 預設 RBF kernel 需要 dense；預測時我會自動 densify
+    #     models.append(("SVM-CPU(sklearn)", skSVC(probability=True, kernel="rbf")))
 
-    # 5.2 LightGBM
-    if HAS_LGBM:
-        models.append((
-            "LightGBM",
-            LGBMClassifier(
-                device="gpu",            # 無 GPU 會自動 fallback
-                n_estimators=800,
-                learning_rate=0.05,
-                num_leaves=127,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42
-            )
-        ))
-    else:
-        warnings.warn("略過 LightGBM。")
+    # # 5.2 LightGBM
+    # if HAS_LGBM:
+    #     models.append((
+    #         "LightGBM",
+    #         LGBMClassifier(
+    #             device="gpu",            # 無 GPU 會自動 fallback
+    #             n_estimators=800,
+    #             learning_rate=0.05,
+    #             num_leaves=127,
+    #             subsample=0.8,
+    #             colsample_bytree=0.8,
+    #             random_state=42
+    #         )
+    #     ))
+    # else:
+    #     warnings.warn("略過 LightGBM。")
 
     # 5.3 XGBoost
     models.append((
@@ -269,7 +270,7 @@ def main():
             X_tr_fs, X_te_fs = X_train, X_test
             fs_meta = {"selected_idx_len": None}
 
-        for model_name, model in models:
+        for model_name, model in tqdm(models, desc="Training models", unit="model"):
             print(f"[TRAIN] {model_name} | {fs_name}")
 
             # cuML 與 sklearn.SVC（RBF）都偏好 dense
@@ -302,7 +303,7 @@ def main():
     df_results = pd.DataFrame(results).sort_values(["fs_method", "model"])
     base = args.out
     df_results.to_csv(f"{base}.csv", index=False)
-    with open(f"{base}.json", "w", encoding="utf-8") as f:
+    with open(f"{base}.json", "w", encoding="utf-8-sig") as f:
         json.dump(df_results.to_dict(orient="records"), f, ensure_ascii=False, indent=2)
 
     print(f"[DONE] saved -> {base}.csv / {base}.json")
