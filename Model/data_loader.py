@@ -353,3 +353,291 @@ def load_training_set(
 
     finally:
         conn.close()
+
+# ====================== PRODUCT-LEVEL LOADER (one row per product) ======================
+
+def load_product_level_training_set(
+    date_cutoff: str = "2025-06-25",
+    top_n: int = 100,
+    pipeline_version: Optional[str] = None,
+    vocab_mode: str = "global",          # 先支援 'global'，之後可擴充 'per_keyword' / 'single_keyword'
+    single_keyword: Optional[str] = None,
+    exclude_products: Optional[List[int]] = None,
+) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
+    """
+    回傳 (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
+
+    - 一筆資料 = 一個 product_id
+    - Dense 特徵：cutoff(含) 以前彙總（含你新增的三欄）
+    - y: cutoff(後) 是否曾出現銷售數量「增加」(prev -> curr)
+    - TF vocab：以 cutoff(含) 以前的所有評論取 global Top-N；商品 TF 指標=是否曾出現該 token(1/0)
+    """
+    exclude_products = exclude_products or []
+    conn = get_connection()
+    try:
+        params = {
+            "cutoff": date_cutoff,
+            "excluded": exclude_products if exclude_products else [-1],
+            "single_kw": single_keyword
+        }
+
+        # 1) 對齊序列 & y（post-cutoff 是否曾增加）
+        sql_y = """
+        WITH comment_batches AS (
+          SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
+          FROM product_comments pc
+          JOIN products p ON p.id = pc.product_id
+          GROUP BY p.keyword, pc.product_id, pc.capture_time
+        ),
+        snap_mapped AS (
+          SELECT
+            s.product_id,
+            p.keyword,
+            s.capture_time AS snapshot_time,
+            s.sales_count,
+            cb_near.batch_time
+          FROM sales_snapshots s
+          JOIN products p ON p.id = s.product_id
+          LEFT JOIN LATERAL (
+            SELECT cb.batch_time
+            FROM comment_batches cb
+            WHERE cb.keyword = p.keyword
+              AND cb.product_id = s.product_id
+              AND cb.batch_time <= s.capture_time
+            ORDER BY cb.batch_time DESC
+            LIMIT 1
+          ) AS cb_near ON TRUE
+        ),
+        batch_repr AS (
+          SELECT *
+          FROM (
+            SELECT
+              product_id,
+              keyword,
+              batch_time,
+              sales_count,
+              snapshot_time,
+              ROW_NUMBER() OVER (
+                PARTITION BY product_id, batch_time
+                ORDER BY snapshot_time DESC
+              ) AS rn
+            FROM snap_mapped
+            WHERE batch_time IS NOT NULL
+          ) t
+          WHERE rn = 1
+        ),
+        seq AS (
+          SELECT
+            product_id,
+            keyword,
+            batch_time,
+            sales_count,
+            LAG(sales_count) OVER (PARTITION BY product_id ORDER BY batch_time) AS prev_sales
+          FROM batch_repr
+        ),
+        y_post AS (
+          SELECT
+            product_id,
+            MAX(CASE WHEN batch_time > %(cutoff)s::timestamp
+                        AND prev_sales IS NOT NULL
+                        AND sales_count > prev_sales
+                     THEN 1 ELSE 0 END) AS y
+          FROM seq
+          GROUP BY product_id
+        )
+        SELECT product_id, y
+        FROM y_post
+        WHERE product_id <> ALL(%(excluded)s)
+        """
+        y_df = pd.read_sql(sql_y, conn, params=params)
+        if y_df.empty:
+            # 沒資料也要保底空結構
+            y_df = pd.DataFrame(columns=["product_id", "y"])
+
+        # 2) Dense 特徵（cutoff 以前）
+        sql_dense = """
+        WITH pre_comments AS (
+          SELECT pc.*, p.name, p.price::float AS price, p.keyword
+          FROM product_comments pc
+          JOIN products p ON p.id = pc.product_id
+          WHERE pc.capture_time <= %(cutoff)s::timestamp
+        ),
+        media_agg AS (
+          SELECT
+            product_id,
+            MAX(
+              CASE
+                WHEN image_urls IS NULL THEN 0
+                WHEN jsonb_typeof(image_urls) <> 'array' THEN 0
+                WHEN jsonb_array_length(image_urls) > 0 THEN 1 ELSE 0
+              END
+            ) AS has_image_urls,
+            SUM(
+              CASE
+                WHEN image_urls IS NULL THEN 0
+                WHEN jsonb_typeof(image_urls) <> 'array' THEN 0
+                ELSE jsonb_array_length(image_urls)
+              END
+            ) AS image_urls_count,
+            MAX(CASE WHEN video_url IS NOT NULL AND video_url <> '' THEN 1 ELSE 0 END) AS has_video_url,
+            MAX(CASE WHEN reply_content IS NOT NULL AND reply_content <> '' THEN 1 ELSE 0 END) AS has_reply_content,
+            AVG(score::float) FILTER (WHERE score IS NOT NULL) AS score_mean,
+            SUM(like_count::int) FILTER (WHERE like_count IS NOT NULL) AS like_count_sum,
+            COUNT(*) AS comment_count_pre
+          FROM pre_comments
+          GROUP BY product_id
+        ),
+        pre_seq AS (
+          -- 對齊後的 pre-cutoff 序列，計算 pre 的變化/增加次數
+          WITH comment_batches AS (
+            SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
+            FROM product_comments pc
+            JOIN products p ON p.id = pc.product_id
+            GROUP BY p.keyword, pc.product_id, pc.capture_time
+          ),
+          snap_mapped AS (
+            SELECT
+              s.product_id,
+              p.keyword,
+              s.capture_time AS snapshot_time,
+              s.sales_count,
+              cb_near.batch_time
+            FROM sales_snapshots s
+            JOIN products p ON p.id = s.product_id
+            LEFT JOIN LATERAL (
+              SELECT cb.batch_time
+              FROM comment_batches cb
+              WHERE cb.keyword = p.keyword
+                AND cb.product_id = s.product_id
+                AND cb.batch_time <= s.capture_time
+              ORDER BY cb.batch_time DESC
+              LIMIT 1
+            ) AS cb_near ON TRUE
+          ),
+          batch_repr AS (
+            SELECT *
+            FROM (
+              SELECT
+                product_id,
+                keyword,
+                batch_time,
+                sales_count,
+                snapshot_time,
+                ROW_NUMBER() OVER (
+                  PARTITION BY product_id, batch_time
+                  ORDER BY snapshot_time DESC
+                ) AS rn
+              FROM snap_mapped
+              WHERE batch_time IS NOT NULL
+            ) t
+            WHERE rn = 1
+          ),
+          seq AS (
+            SELECT
+              product_id,
+              batch_time,
+              sales_count,
+              LAG(sales_count) OVER (PARTITION BY product_id ORDER BY batch_time) AS prev_sales
+            FROM batch_repr
+          )
+          SELECT
+            product_id,
+            MAX(CASE WHEN batch_time <= %(cutoff)s::timestamp
+                        AND prev_sales IS NOT NULL
+                        AND sales_count IS DISTINCT FROM prev_sales
+                     THEN 1 ELSE 0 END) AS had_any_change_pre,
+            COUNT(*) FILTER (WHERE batch_time <= %(cutoff)s::timestamp
+                               AND prev_sales IS NOT NULL
+                               AND sales_count > prev_sales) AS num_increases_pre
+          FROM seq
+          GROUP BY product_id
+        )
+        SELECT
+          p.id AS product_id,
+          p.name,
+          p.price::float AS price,
+          p.keyword,
+          COALESCE(m.has_image_urls,0) AS has_image_urls,
+          COALESCE(m.image_urls_count,0) AS image_urls_count,
+          COALESCE(m.has_video_url,0) AS has_video_url,
+          COALESCE(m.has_reply_content,0) AS has_reply_content,
+          COALESCE(m.score_mean,0) AS score_mean,
+          COALESCE(m.like_count_sum,0) AS like_count_sum,
+          COALESCE(m.comment_count_pre,0) AS comment_count_pre,
+          COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
+          COALESCE(s.num_increases_pre,0) AS num_increases_pre
+        FROM products p
+        LEFT JOIN media_agg m ON m.product_id = p.id
+        LEFT JOIN pre_seq s   ON s.product_id = p.id
+        WHERE p.id <> ALL(%(excluded)s)
+        """
+        dense = pd.read_sql(sql_dense, conn, params=params)
+
+        # 3) y merge（沒 y 的補 0）
+        df = dense.merge(y_df, on="product_id", how="left")
+        df["y"] = df["y"].fillna(0).astype(int)
+
+        # 4) TF vocab（global, cutoff 以前）
+        vocab = fetch_top_terms(conn,
+                                top_n=top_n,
+                                pipeline_version=pipeline_version,
+                                product_id=None,
+                                min_len=2, max_len=4)
+
+        # 5) 取 (product_id, token) 對：商品在 cutoff 前是否「曾出現」該 token
+        if vocab:
+            sql_pairs = """
+            WITH vocab AS (
+              SELECT UNNEST(%(tokens)s::text[]) AS token
+            )
+            SELECT DISTINCT
+              pc.product_id,
+              ts.token
+            FROM tfidf_scores ts
+            JOIN product_comments pc ON pc.comment_id = ts.comment_id
+            JOIN vocab v ON v.token = ts.token
+            WHERE pc.capture_time <= %(cutoff)s::timestamp
+              AND pc.product_id <> ALL(%(excluded)s)
+            """
+            pairs = pd.read_sql(sql_pairs, conn, params={"tokens": vocab, **params})
+        else:
+            pairs = pd.DataFrame(columns=["product_id", "token"])
+
+        # 6) build sparse matrix (row=product_id)
+        # 先確保 meta row order
+        meta = df[["product_id", "name", "keyword"]].copy()
+        id_index = pd.Series(range(len(meta)), index=meta["product_id"])
+        if pairs.empty or not vocab:
+            X_tfidf = csr_matrix((len(meta), 0), dtype=np.int8)
+        else:
+            token_to_col = {t: j for j, t in enumerate(vocab)}
+            pairs = pairs[pairs["token"].isin(token_to_col.keys())].copy()
+            pairs["row"] = pairs["product_id"].map(id_index)
+            pairs["col"] = pairs["token"].map(token_to_col)
+            pairs = pairs.dropna(subset=["row", "col"])
+            rows = pairs["row"].astype(int).to_numpy()
+            cols = pairs["col"].astype(int).to_numpy()
+            data = np.ones(len(pairs), dtype=np.int8)
+            X_tfidf = coo_matrix((data, (rows, cols)),
+                                 shape=(len(meta), len(vocab)), dtype=np.int8).tocsr()
+
+        # 7) Dense features
+        dense_cols = [
+            "price", "has_image_urls", "image_urls_count", "has_video_url",
+            "has_reply_content", "score_mean", "like_count_sum",
+            "had_any_change_pre", "num_increases_pre", "comment_count_pre"
+        ]
+        for c in dense_cols:
+            if c not in df.columns:
+                df[c] = 0
+        X_dense = df[dense_cols].fillna(0).astype(float)
+
+        y = df["y"].astype(int)
+
+        # 8) meta 增補 is_train（K 折會用不到，但保留欄位一致性）
+        meta["is_train"] = True
+
+        return X_dense, X_tfidf, y, meta, vocab
+
+    finally:
+        conn.close()
