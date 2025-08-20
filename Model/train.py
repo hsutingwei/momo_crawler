@@ -85,6 +85,11 @@ def select_features_by_lgbm(X_train: csr_matrix, y_train: pd.Series,
     order = np.argsort(importances)[::-1]
     # 至少取 top_k；若重要度全 0，避免空集合
     top_idx = order[:max(1, min(top_k, max(1, int((importances > 0).sum()))))]
+    
+    # 新增：檢查特徵選取是否真的生效
+    print(f"[FS] Original features: {X_train.shape[1]}, Selected: {len(top_idx)}")
+    print(f"[FS] Top 10 important features: {top_idx[:10]}")
+    
     return X_train[:, top_idx], X_test[:, top_idx], top_idx
 
 def get_positive_score(model, X):
@@ -135,11 +140,11 @@ def evaluate(y_true, y_pred, y_score) -> dict:
         "support_1": int(support[1]),
     })
 
-    # 類別別 AUC（one-vs-rest）：對 1 的 AUC 與整體 AUC 相同，對 0 的 AUC = 1 - AUC(1) 只有在完美對稱時才成立；
-    # 因此用顯式 one-vs-rest 作法：
+    # 修正：類別別 AUC 計算
     try:
-        auc_1 = roc_auc_score(y_true, y_score)           # 1 vs rest
-        auc_0 = roc_auc_score(1 - y_true, 1 - y_score)   # 0 vs rest
+        # 對於二分類，auc_1 就是整體 AUC，auc_0 = 1 - auc_1
+        auc_1 = roc_auc_score(y_true, y_score)  # 1 vs rest
+        auc_0 = 1.0 - auc_1                     # 0 vs rest
     except Exception:
         auc_0 = float("nan")
         auc_1 = float("nan")
@@ -259,6 +264,15 @@ def main():
 
     print(f"[INFO] Train size: {X_train.shape}, Test size: {X_test.shape}")
     print(f"[INFO] Positive rate (train/test): {y_train.mean():.3f} / {y_test.mean():.3f}")
+    
+    # 新增：診斷資訊
+    print(f"[INFO] Feature dimensions - Dense: {X_dense_df.shape[1]}, TF-IDF: {X_tfidf.shape[1]}")
+    print(f"[INFO] Total features: {X_all.shape[1]}")
+    print(f"[INFO] Class distribution - Train: {np.bincount(y_train)}, Test: {np.bincount(y_test)}")
+    
+    # 檢查特徵是否有變化
+    print(f"[INFO] Dense features range: [{X_dense_df.min().min():.3f}, {X_dense_df.max().max():.3f}]")
+    print(f"[INFO] TF-IDF features sparsity: {1 - X_tfidf.nnz / (X_tfidf.shape[0] * X_tfidf.shape[1]):.3f}")
 
     # 4) 兩種特徵選取：無 / LGBM 重要度
     fs_settings = [
@@ -314,10 +328,15 @@ def main():
     for fs_name, topk in fs_settings:
         if fs_name == "lgbm_fs":
             print(f"[FS] Using LGBM feature selection top_k={topk}")
-            X_tr_fs, X_te_fs, selected_idx = select_features_by_lgbm(
-                X_train, y_train, X_test, top_k=topk
-            )
-            fs_meta = {"selected_idx_len": int(len(selected_idx))}
+            if not HAS_LGBM:
+                print("[FS] LightGBM not available, skipping feature selection")
+                X_tr_fs, X_te_fs = X_train, X_test
+                fs_meta = {"selected_idx_len": None}
+            else:
+                X_tr_fs, X_te_fs, selected_idx = select_features_by_lgbm(
+                    X_train, y_train, X_test, top_k=topk
+                )
+                fs_meta = {"selected_idx_len": int(len(selected_idx))}
         else:
             X_tr_fs, X_te_fs = X_train, X_test
             fs_meta = {"selected_idx_len": None}
