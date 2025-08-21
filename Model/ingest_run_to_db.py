@@ -27,353 +27,394 @@ python Model/ingest_run_to_db.py \
 python Model/ingest_run_to_db.py --outdir Model/outputs --mode-code product_level --mode-short "..." --mode-long "..."
 """
 import os
+import re
 import json
 import glob
+import uuid
+import csv
 import argparse
-from datetime import datetime
+import datetime as dt
+from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
-from dotenv import load_dotenv
 import psycopg2
-from psycopg2.extras import execute_values, Json
+import psycopg2.extras
+from dotenv import load_dotenv
 
-# ---------- helpers ----------
+# ---------- DB helpers ----------
 
-def find_manifest(outdir: str, given: str | None):
-    if given and os.path.exists(given):
-        return given
-    # fallback: 找 outdir 下最新的 run_manifest*.json
-    cands = sorted(glob.glob(os.path.join(outdir, "**", "run_manifest*.json"), recursive=True),
-                   key=lambda p: os.path.getmtime(p), reverse=True)
-    if not cands:
-        raise FileNotFoundError("找不到 run manifest，請用 --manifest 指定或確認 outdir。")
-    return cands[0]
-
-def read_csv_if_exists(path: str) -> pd.DataFrame | None:
-    return pd.read_csv(path) if (path and os.path.exists(path)) else None
-
-def load_env():
+def get_db_conn():
     load_dotenv()
-    return dict(
-        host=os.getenv("PGHOST", "127.0.0.1"),
-        port=int(os.getenv("PGPORT", "5432")),
-        db=os.getenv("PGDATABASE", "postgres"),
-        user=os.getenv("PGUSER", "postgres"),
-        pwd=os.getenv("PGPASSWORD", "")
+    conn = psycopg2.connect(
+        host=os.getenv("PG_HOST", "localhost"),
+        port=os.getenv("PG_PORT", "5432"),
+        dbname=os.getenv("PG_DB", "postgres"),
+        user=os.getenv("PG_USER", "postgres"),
+        password=os.getenv("PG_PASSWORD", "")
     )
+    return conn
 
-def connect_db(cfg: dict):
-    return psycopg2.connect(
-        host=cfg["host"], port=cfg["port"], dbname=cfg["db"],
-        user=cfg["user"], password=cfg["pwd"]
-    )
 
-def upsert_mode(cur, code: str, short: str, long: str) -> int:
+def upsert_ml_mode(cur, code: str, short: str, long: str) -> int:
     cur.execute("""
         INSERT INTO ml_modes(code, mode_desc_short, mode_desc_long)
         VALUES (%s, %s, %s)
         ON CONFLICT (code) DO UPDATE
-          SET mode_desc_short = EXCLUDED.mode_desc_short,
-              mode_desc_long  = EXCLUDED.mode_desc_long,
-              updated_at = now()
+        SET mode_desc_short = EXCLUDED.mode_desc_short,
+            mode_desc_long  = EXCLUDED.mode_desc_long
         RETURNING id;
     """, (code, short, long))
     mode_id = cur.fetchone()[0]
     return mode_id
 
-def insert_run(cur, run_obj: dict, mode_id: int) -> None:
-    # run_obj 由 manifest 組：包含 date_cutoff / cv / config / target_definition
+
+def insert_ml_run(cur, run_manifest: Dict[str, Any], mode_id: int) -> str:
+    # run_id 來自 run manifest
+    run_id = run_manifest.get("run_id")
+    if not run_id:
+        run_id = str(uuid.uuid4())
+
+    date_cutoff = run_manifest.get("date_cutoff")
+    if isinstance(date_cutoff, str):
+        date_cutoff = dt.datetime.strptime(date_cutoff, "%Y-%m-%d").date()
+
+    cv_splits = int(run_manifest.get("cv", 10))
+    target_definition = run_manifest.get("target_definition", "post-cutoff any increase")
+
+    # 統一把訓練設定存到 config JSONB
+    config = {
+        "vocab_mode": run_manifest.get("vocab_mode"),
+        "top_n": run_manifest.get("top_n"),
+        "pipeline_version": run_manifest.get("pipeline_version"),
+        "excluded_products": run_manifest.get("excluded_products", []),
+        "notes": run_manifest.get("notes"),
+        "fs_methods": run_manifest.get("fs_methods", []),  # 總 manifest 若沒有，也沒關係
+        "algorithms": run_manifest.get("algorithms", [])
+    }
+
     cur.execute("""
         INSERT INTO ml_runs(run_id, mode_id, date_cutoff, cv_splits, target_definition, config)
-        VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (run_id) DO NOTHING;
-    """, (
-        run_obj["run_id"], mode_id, run_obj["date_cutoff"],
-        run_obj["cv_splits"], run_obj["target_definition"],
-        json.dumps(run_obj["config"], ensure_ascii=False)
-    ))
+    """, (run_id, mode_id, date_cutoff, cv_splits, target_definition, json.dumps(config)))
+    return run_id
 
-def insert_run_features(cur, run_id: str, date_cutoff: str,
-                        dataset_manifest: dict | None,
-                        vocab_mode: str | None, topn: int | None) -> None:
-    if not dataset_manifest:
-        return
-    # Dense
-    dense_cols = dataset_manifest.get("dense_features", [])
-    dense_art = dict(Xdense_csv=dataset_manifest["files"].get("Xdense_csv"))
+
+def insert_ml_run_feature(cur, run_id: str, family: str, name: str, params: Dict[str, Any],
+                          source_window: Optional[Dict[str, Any]] = None,
+                          version: Optional[str] = None, artifacts: Optional[Dict[str, Any]] = None) -> int:
     cur.execute("""
         INSERT INTO ml_run_features(run_id, family, name, params, source_window, version, artifacts)
-        VALUES (%s, 'dense', %s, %s::jsonb, %s::jsonb, %s, %s::jsonb)
-    """, (
-        run_id,
-        "dense_default",
-        json.dumps({"columns": dense_cols}, ensure_ascii=False),
-        json.dumps({"type":"pre_cutoff","start": None, "end": date_cutoff}),
-        None,
-        json.dumps(dense_art, ensure_ascii=False)
-    ))
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
+    """, (run_id, family, name, json.dumps(params),
+          json.dumps(source_window) if source_window else None,
+          version, json.dumps(artifacts) if artifacts else None))
+    return cur.fetchone()[0]
 
-    # TF-IDF
-    vocab_len = dataset_manifest.get("shapes", {}).get("vocab")
-    tf_art = dict(
-        vocab_file=dataset_manifest["files"].get("vocab_txt"),
-        Xtfidf_npz=dataset_manifest["files"].get("Xtfidf_npz")
-    )
-    tf_params = {"vocab_mode": vocab_mode, "top_n": topn, "vocab_size": vocab_len}
+
+def insert_ml_run_algorithm(cur, run_id: str, algorithm: str, fs_method: str,
+                            hyperparams: Dict[str, Any], notes: Optional[str] = None) -> int:
     cur.execute("""
-        INSERT INTO ml_run_features(run_id, family, name, params, source_window, version, artifacts)
-        VALUES (%s, 'tfidf', %s, %s::jsonb, %s::jsonb, %s, %s::jsonb)
-    """, (
-        run_id,
-        f"tfidf_{vocab_mode}_top{topn}",
-        json.dumps(tf_params, ensure_ascii=False),
-        json.dumps({"type":"pre_cutoff","start": None, "end": date_cutoff}),
-        None,
-        json.dumps(tf_art, ensure_ascii=False)
-    ))
+        INSERT INTO ml_run_algorithms(run_id, algorithm, fs_method, hyperparams, notes)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id;
+    """, (run_id, algorithm, fs_method, json.dumps(hyperparams), notes))
+    return cur.fetchone()[0]
 
-def upsert_algorithms(cur, run_id: str, alg_fs_pairs: list[tuple[str, str]]) -> dict:
-    """
-    回傳 {(algorithm, fs_method) -> algorithm_id}
-    """
-    alg2id = {}
-    for algo, fs in alg_fs_pairs:
+
+def insert_fold_metrics_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
+    # 期待欄位：fold, n_products, pos_ratio, accuracy, f1_macro, f1_weighted, precision_macro, recall_macro, auc,
+    # precision_0, recall_0, f1_0, auc_0, support_0, precision_1, recall_1, f1_1, auc_1, support_1
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    for r in rows:
         cur.execute("""
-            INSERT INTO ml_run_algorithms(run_id, algorithm, fs_method, hyperparams)
-            VALUES (%s, %s, %s, '{}'::jsonb)
-            ON CONFLICT (run_id, algorithm, fs_method) DO UPDATE
-              SET updated_at = now()
-            RETURNING id;
-        """, (run_id, algo, fs))
-        alg2id[(algo, fs)] = cur.fetchone()[0]
-    return alg2id
-
-def insert_fold_metrics(cur, run_id: str, alg2id: dict, df: pd.DataFrame) -> None:
-    if df is None or df.empty: 
-        return
-    # 預期欄位：fold, algorithm, fs_method, n_products, pos_ratio, accuracy, f1_macro, f1_weighted,
-    # precision_macro, recall_macro, auc, precision_0, recall_0, f1_0, auc_0, support_0,
-    # precision_1, recall_1, f1_1, auc_1, support_1
-    rows = []
-    for _, r in df.iterrows():
-        algo = str(r["algorithm"])
-        fs   = str(r.get("fs_method", "no_fs"))
-        alg_id = alg2id.get((algo, fs))
-        if not alg_id:
-            # 若還沒註冊演算法，先補上
-            cur.execute("""
-                INSERT INTO ml_run_algorithms(run_id, algorithm, fs_method, hyperparams)
-                VALUES (%s, %s, %s, '{}'::jsonb)
-                ON CONFLICT (run_id, algorithm, fs_method) DO UPDATE SET updated_at=now()
-                RETURNING id;
-            """, (run_id, algo, fs))
-            alg_id = cur.fetchone()[0]
-            alg2id[(algo, fs)] = alg_id
-
-        rows.append((
-            run_id, alg_id, int(r["fold"]),
+            INSERT INTO ml_fold_metrics(
+              run_id, algorithm_id, fold, n_products, pos_ratio,
+              accuracy, f1_macro, f1_weighted, precision_macro, recall_macro, auc,
+              precision_0, recall_0, f1_0, auc_0, support_0,
+              precision_1, recall_1, f1_1, auc_1, support_1
+            )
+            VALUES (
+              %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s
+            );
+        """, (
+            run_id, algorithm_id,
+            int(r.get("fold", 0)),
             int(r.get("n_products", 0)),
-            float(r.get("pos_ratio", 0)),
-            float(r.get("accuracy", 0)),
-            float(r.get("f1_macro", 0)),
-            float(r.get("f1_weighted", 0)),
-            float(r.get("precision_macro", 0)),
-            float(r.get("recall_macro", 0)),
-            float(r.get("auc", 0)),
-            float(r.get("precision_0", 0)), float(r.get("recall_0", 0)),
-            float(r.get("f1_0", 0)), float(r.get("auc_0", 0)), int(r.get("support_0", 0)),
-            float(r.get("precision_1", 0)), float(r.get("recall_1", 0)),
-            float(r.get("f1_1", 0)), float(r.get("auc_1", 0)), int(r.get("support_1", 0))
+            float(r.get("pos_ratio", 0) or 0),
+            float(r.get("accuracy", 0) or 0),
+            float(r.get("f1_macro", 0) or 0),
+            float(r.get("f1_weighted", 0) or 0),
+            float(r.get("precision_macro", 0) or 0),
+            float(r.get("recall_macro", 0) or 0),
+            float(r.get("auc", 0) or 0),
+            float(r.get("precision_0", 0) or 0),
+            float(r.get("recall_0", 0) or 0),
+            float(r.get("f1_0", 0) or 0),
+            float(r.get("auc_0", 0) or 0),
+            int(r.get("support_0", 0) or 0),
+            float(r.get("precision_1", 0) or 0),
+            float(r.get("recall_1", 0) or 0),
+            float(r.get("f1_1", 0) or 0),
+            float(r.get("auc_1", 0) or 0),
+            int(r.get("support_1", 0) or 0)
         ))
-    execute_values(cur, """
-        INSERT INTO ml_fold_metrics(
-            run_id, algorithm_id, fold, n_products, pos_ratio,
-            accuracy, f1_macro, f1_weighted, precision_macro, recall_macro, auc,
-            precision_0, recall_0, f1_0, auc_0, support_0,
-            precision_1, recall_1, f1_1, auc_1, support_1
-        ) VALUES %s
-    """, rows)
 
-def insert_summary(cur, run_id: str, alg2id: dict, summary_df: pd.DataFrame | None,
-                   folds: int) -> None:
-    """
-    若有 model_results.csv（已含 mean/std），直接寫入；
-    否則由 fold_metrics 先 groupby 算出來再寫入（此處假設你已先呼叫 insert_fold_metrics）。
-    """
-    if summary_df is not None and not summary_df.empty and \
-       {"algorithm","fs_method"}.issubset(summary_df.columns):
-        for _, r in summary_df.iterrows():
-            algo = str(r["algorithm"])
-            fs   = str(r.get("fs_method", "no_fs"))
-            alg_id = alg2id.get((algo, fs))
-            if not alg_id:
-                cur.execute("""
-                    INSERT INTO ml_run_algorithms(run_id, algorithm, fs_method, hyperparams)
-                    VALUES (%s, %s, %s, '{}'::jsonb)
-                    ON CONFLICT (run_id, algorithm, fs_method) DO UPDATE SET updated_at=now()
-                    RETURNING id;
-                """, (run_id, algo, fs))
-                alg_id = cur.fetchone()[0]
-                alg2id[(algo, fs)] = alg_id
 
-            cur.execute("""
-                INSERT INTO ml_run_summary(
-                  run_id, algorithm_id, folds,
-                  accuracy_mean, f1_macro_mean, f1_weighted_mean,
-                  precision_macro_mean, recall_macro_mean, auc_mean,
-                  precision_0_mean, recall_0_mean, f1_0_mean, auc_0_mean,
-                  precision_1_mean, recall_1_mean, f1_1_mean, auc_1_mean,
-                  accuracy_std, f1_macro_std, f1_weighted_std,
-                  precision_macro_std, recall_macro_std, auc_std,
-                  precision_0_std, recall_0_std, f1_0_std, auc_0_std,
-                  precision_1_std, recall_1_std, f1_1_std, auc_1_std
-                ) VALUES (
-                  %s,%s,%s,
-                  %s,%s,%s,
-                  %s,%s,%s,
-                  %s,%s,%s,%s,
-                  %s,%s,%s,%s,
-                  %s,%s,%s,
-                  %s,%s,%s,
-                  %s,%s,%s,%s,
-                  %s,%s,%s,%s
-                )
-            """, (
-                run_id, alg_id, folds,
-                r.get("accuracy_mean"), r.get("f1_macro_mean"), r.get("f1_weighted_mean"),
-                r.get("precision_macro_mean"), r.get("recall_macro_mean"), r.get("auc_mean"),
-                r.get("precision_0_mean"), r.get("recall_0_mean"), r.get("f1_0_mean"), r.get("auc_0_mean"),
-                r.get("precision_1_mean"), r.get("recall_1_mean"), r.get("f1_1_mean"), r.get("auc_1_mean"),
-                r.get("accuracy_std"), r.get("f1_macro_std"), r.get("f1_weighted_std"),
-                r.get("precision_macro_std"), r.get("recall_macro_std"), r.get("auc_std"),
-                r.get("precision_0_std"), r.get("recall_0_std"), r.get("f1_0_std"), r.get("auc_0_std"),
-                r.get("precision_1_std"), r.get("recall_1_std"), r.get("f1_1_std"), r.get("auc_1_std"),
-            ))
-    else:
-        # 若沒有 summary_df，你也可以在這裡用 SQL 由 ml_fold_metrics 聚合產出，再塞回 ml_run_summary
-        pass
+def insert_summary_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        r = next(reader)  # 只有一列
+    cur.execute("""
+        INSERT INTO ml_run_summary(
+          run_id, algorithm_id, folds,
+          accuracy_mean, f1_macro_mean, f1_weighted_mean, precision_macro_mean, recall_macro_mean, auc_mean,
+          precision_0_mean, recall_0_mean, f1_0_mean, auc_0_mean,
+          precision_1_mean, recall_1_mean, f1_1_mean, auc_1_mean,
+          accuracy_std, f1_macro_std, f1_weighted_std, precision_macro_std, recall_macro_std, auc_std,
+          precision_0_std, recall_0_std, f1_0_std, auc_0_std,
+          precision_1_std, recall_1_std, f1_1_std, auc_1_std
+        )
+        VALUES (
+          %s, %s, %s,
+          %s, %s, %s, %s, %s, %s,
+          %s, %s, %s, %s,
+          %s, %s, %s, %s,
+          %s, %s, %s, %s, %s,
+          %s, %s, %s, %s,
+          %s, %s, %s, %s
+        );
+    """, (
+        run_id, algorithm_id, int(r.get("folds", 0)),
+        float(r.get("accuracy_mean", 0) or 0),
+        float(r.get("f1_macro_mean", 0) or 0),
+        float(r.get("f1_weighted_mean", 0) or 0),
+        float(r.get("precision_macro_mean", 0) or 0),
+        float(r.get("recall_macro_mean", 0) or 0),
+        float(r.get("auc_mean", 0) or 0),
+        float(r.get("precision_0_mean", 0) or 0),
+        float(r.get("recall_0_mean", 0) or 0),
+        float(r.get("f1_0_mean", 0) or 0),
+        float(r.get("auc_0_mean", 0) or 0),
+        float(r.get("precision_1_mean", 0) or 0),
+        float(r.get("recall_1_mean", 0) or 0),
+        float(r.get("f1_1_mean", 0) or 0),
+        float(r.get("auc_1_mean", 0) or 0),
+        float(r.get("accuracy_std", 0) or 0),
+        float(r.get("f1_macro_std", 0) or 0),
+        float(r.get("f1_weighted_std", 0) or 0),
+        float(r.get("precision_macro_std", 0) or 0),
+        float(r.get("recall_macro_std", 0) or 0),
+        float(r.get("auc_std", 0) or 0),
+        float(r.get("precision_0_std", 0) or 0),
+        float(r.get("recall_0_std", 0) or 0),
+        float(r.get("f1_0_std", 0) or 0),
+        float(r.get("auc_0_std", 0) or 0),
+        float(r.get("precision_1_std", 0) or 0),
+        float(r.get("recall_1_std", 0) or 0),
+        float(r.get("f1_1_std", 0) or 0),
+        float(r.get("auc_1_std", 0) or 0)
+    ))
 
-def insert_artifacts(cur, run_id: str, artifacts_json: dict) -> None:
+
+def insert_run_artifacts(cur, run_id: str, artifacts: Dict[str, Any]):
     cur.execute("""
         INSERT INTO ml_run_artifacts(run_id, artifacts)
-        VALUES (%s, %s::jsonb)
-    """, (run_id, json.dumps(artifacts_json, ensure_ascii=False)))
+        VALUES (%s, %s);
+    """, (run_id, json.dumps(artifacts)))
+
+
+# ---------- FS helpers / manifest helpers ----------
+
+def find_manifest(outdir: str, manifest_path: Optional[str]) -> str:
+    """
+    若指定 --manifest 就用該檔；否則從 outdir 找「最新的 *_RUN_manifest.json」。
+    """
+    if manifest_path:
+        if not os.path.isfile(manifest_path):
+            raise FileNotFoundError(f"指定的 manifest 不存在: {manifest_path}")
+        return manifest_path
+
+    patterns = [
+        os.path.join(outdir, "*_RUN_manifest.json"),
+        os.path.join(outdir, "RUN_manifest.json"),
+    ]
+    candidates = []
+    for pat in patterns:
+        candidates.extend(glob.glob(pat))
+    if not candidates:
+        raise FileNotFoundError("找不到 run manifest，請用 --manifest 指定或確認 outdir。")
+
+    # 取最後修改時間最新的一個
+    candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return candidates[0]
+
+
+def load_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def safe_get_fs_methods(run_manifest: Dict[str, Any], child_manifests: List[Dict[str, Any]]) -> List[str]:
+    """
+    run manifest 假如沒有 fs_methods（複數），就從子 manifest 的 fs_method（單數）蒐集。
+    """
+    vals = run_manifest.get("fs_methods")
+    if isinstance(vals, list) and vals:
+        return list(dict.fromkeys(vals))  # 去重保持順序
+    # fallback: collect from children
+    acc = []
+    for cm in child_manifests:
+        m = cm.get("fs_method") or cm.get("fs_methods")
+        if isinstance(m, list):
+            acc.extend(m)
+        elif isinstance(m, str):
+            acc.append(m)
+    return list(dict.fromkeys(acc))
+
+
+def find_child_manifests(outdir: str, run_id: str) -> List[str]:
+    """
+    尋找子 manifest：命名通常像 run_..._manifest.json（但不含 RUN_manifest）
+    """
+    pats = [
+        os.path.join(outdir, f"*{run_id}*manifest.json"),
+        os.path.join(outdir, "run_*_manifest.json"),
+        os.path.join(outdir, "*_manifest.json"),
+    ]
+    allc = []
+    for p in pats:
+        allc.extend(glob.glob(p))
+    # 過濾 RUN_manifest
+    allc = [p for p in allc if "_RUN_manifest.json" not in p and os.path.basename(p) != "RUN_manifest.json"]
+    # 去重
+    uniq = list(dict.fromkeys(allc))
+    return uniq
+
+
+# ---------- main flow ----------
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--outdir", required=True, help="train.py 的輸出資料夾")
-    ap.add_argument("--manifest", help="run_manifest.json 路徑（可略，會自動尋找最新）")
-    ap.add_argument("--mode-code", required=True, help="如 product_level")
+    ap = argparse.ArgumentParser(
+        description="把 train.py 的輸出 ingest 進資料庫"
+    )
+    ap.add_argument("--outdir", required=True, help="train.py 寫出檔案的資料夾")
+    ap.add_argument("--manifest", required=False, help="指定 RUN manifest 路徑（可省略，會自動尋找最新）")
+    ap.add_argument("--mode-code", required=True, help="模式代碼（如 product_level）")
     ap.add_argument("--mode-short", required=True, help="模式簡述")
-    ap.add_argument("--mode-long", required=True, help="模式詳細說明")
-    ap.add_argument("--dry-run", action="store_true", help="不寫入 DB, 僅顯示解析內容")
+    ap.add_argument("--mode-long", required=True, help="模式詳述")
     args = ap.parse_args()
 
-    manifest_path = find_manifest(args.outdir, args.manifest)
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        run_manifest = json.load(f)
+    outdir = args.outdir
+    run_manifest_path = find_manifest(outdir, args.manifest)
+    run_manifest = load_json(run_manifest_path)
 
-    run_id        = run_manifest.get("run_id")
-    date_cutoff   = run_manifest.get("date_cutoff")
-    cv_splits     = int(run_manifest.get("cv", run_manifest.get("cv_splits", 10)))
-    vocab_mode    = run_manifest.get("vocab_mode")
-    topn_list     = run_manifest.get("top_n_list") or []
-    algorithms    = run_manifest.get("algorithms") or []
-    fs_methods    = run_manifest.get("fs_methods") or []
-    dataset_man   = run_manifest.get("dataset_manifest")  # 我們前面在 train.py 有寫進去
-    target_def    = run_manifest.get("y_definition", "post-cutoff any increase")
+    # 連 DB
+    conn = get_db_conn()
+    conn.autocommit = False
+    cur = conn.cursor()
 
-    # 報表位置（盡量容錯抓路徑）
-    fold_csv = None
-    summary_csv = None
-    # 優先抓與 manifest 同資料夾
-    base = os.path.dirname(manifest_path)
-    cand_fold = glob.glob(os.path.join(base, "**", "fold_metrics.csv"), recursive=True)
-    cand_sum  = glob.glob(os.path.join(base, "**", "model_results.csv"), recursive=True)
-    if cand_fold: fold_csv = cand_fold[0]
-    if cand_sum:  summary_csv = cand_sum[0]
-
-    df_fold = read_csv_if_exists(fold_csv)
-    df_sum  = read_csv_if_exists(summary_csv)
-
-    # 整理所有 artifacts
-    artifacts = {
-        "manifest": manifest_path,
-        "fold_metrics_csv": fold_csv,
-        "summary_csv": summary_csv,
-        "dataset_manifest": dataset_man and dataset_man.get("path"),
-    }
-
-    # 演算法/FS 組合（若 manifest.children 列出了更細者，也可從 children 合併）
-    alg_fs_pairs = []
-    if algorithms and fs_methods:
-        for a in algorithms:
-            for fs in fs_methods:
-                alg_fs_pairs.append((a, fs))
-    else:
-        # 從 fold_metrics 推斷
-        if df_fold is not None and not df_fold.empty:
-            alg_fs_pairs = sorted({(str(x["algorithm"]), str(x.get("fs_method","no_fs")))
-                                  for _, x in df_fold.iterrows()})
-
-    # 準備 run 記錄
-    cfg_obj = {
-        "excluded_products": run_manifest.get("exclude_products"),
-        "pipeline_version": run_manifest.get("pipeline_version"),
-        "vocab_mode": vocab_mode,
-        "top_n_list": topn_list,
-        "algorithms": algorithms,
-        "fs_methods": fs_methods
-    }
-    run_obj = {
-        "run_id": run_id,
-        "date_cutoff": date_cutoff,
-        "cv_splits": cv_splits,
-        "target_definition": target_def,
-        "config": cfg_obj
-    }
-
-    if args.dry_run:
-        print("[DRY-RUN] manifest:", json.dumps(run_manifest, ensure_ascii=False, indent=2))
-        print("[DRY-RUN] fold_metrics head:\n", df_fold.head() if df_fold is not None else None)
-        print("[DRY-RUN] summary head:\n", df_sum.head() if df_sum is not None else None)
-        print("[DRY-RUN] alg_fs_pairs:", alg_fs_pairs)
-        return
-
-    # --- 寫入 DB ---
-    dbc = connect_db(load_env())
-    dbc.autocommit = False
     try:
-        with dbc.cursor() as cur:
-            # 1) 模式 upsert
-            mode_id = upsert_mode(cur, args.mode_code, args.mode_short, args.mode_long)
+        # 1) ml_modes
+        mode_id = upsert_ml_mode(cur, args.mode_code, args.mode_short, args.mode_long)
 
-            # 2) 這次 run 基本資料
-            insert_run(cur, run_obj, mode_id)
+        # 2) ml_runs
+        run_id = insert_ml_run(cur, run_manifest, mode_id)
 
-            # 3) 特徵家族（dense / tfidf）
-            topn = (topn_list[0] if topn_list else None)
-            insert_run_features(cur, run_id, date_cutoff, dataset_man, vocab_mode, topn)
+        # 3) 子 manifest 列出來
+        child_paths = find_child_manifests(outdir, run_id)
+        child_manifests = [load_json(p) for p in child_paths]
 
-            # 4) 演算法列表
-            alg2id = upsert_algorithms(cur, run_id, alg_fs_pairs)
+        # 4) ml_run_features：dense 與 tfidf（若存在於 run_manifest）
+        #   dense
+        dense_params = run_manifest.get("dense", {})
+        if dense_params:
+            insert_ml_run_feature(
+                cur, run_id,
+                family="dense",
+                name="dense_basic",
+                params=dense_params,
+                source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
+                version=run_manifest.get("pipeline_version"),
+                artifacts=None
+            )
 
-            # 5) 每折指標
-            insert_fold_metrics(cur, run_id, alg2id, df_fold)
+        #   tfidf
+        tfidf_params = run_manifest.get("tfidf", {})
+        if tfidf_params:
+            tfidf_name = f"tfidf_{tfidf_params.get('vocab_mode', 'global')}_top{tfidf_params.get('top_n', 0)}"
+            art = {}
+            if "vocab_file" in tfidf_params:
+                art["vocab_file"] = tfidf_params["vocab_file"]
+            insert_ml_run_feature(
+                cur, run_id,
+                family="tfidf",
+                name=tfidf_name,
+                params={
+                    "vocab_mode": tfidf_params.get("vocab_mode"),
+                    "top_n": tfidf_params.get("top_n")
+                },
+                source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
+                version=run_manifest.get("pipeline_version"),
+                artifacts=art or None
+            )
 
-            # 6) 摘要
-            insert_summary(cur, run_id, alg2id, df_sum, cv_splits)
+        # 5) ml_run_algorithms + 指標
+        artifacts_all: Dict[str, Any] = {"children": []}
+        for cpath, cm in zip(child_paths, child_manifests):
+            algo = cm.get("algorithm") or cm.get("alg") or "unknown"
+            # ★ 兼容 fs_method 與 fs_methods
+            fs_method = None
+            if "fs_method" in cm:
+                fs_method = cm["fs_method"]
+            elif "fs_methods" in cm:
+                # 若是 list 取第一個，或轉成字串
+                val = cm["fs_methods"]
+                fs_method = val[0] if isinstance(val, list) and val else str(val)
+            else:
+                fs_method = "no_fs"
 
-            # 7) 產物路徑
-            insert_artifacts(cur, run_id, artifacts)
+            hyper = cm.get("hyperparams", {})
+            alg_id = insert_ml_run_algorithm(cur, run_id, algo, fs_method, hyper)
 
-        dbc.commit()
+            # fold_metrics.csv / summary.csv
+            fcsv = cm.get("fold_metrics_csv")
+            scsv = cm.get("summary_csv")
+
+            if fcsv and os.path.isfile(fcsv):
+                insert_fold_metrics_csv(cur, run_id, alg_id, fcsv)
+            if scsv and os.path.isfile(scsv):
+                insert_summary_csv(cur, run_id, alg_id, scsv)
+
+            artifacts_all["children"].append({
+                "manifest": cpath,
+                "algorithm": algo,
+                "fs_method": fs_method,
+                "fold_metrics_csv": fcsv,
+                "summary_csv": scsv
+            })
+
+        # 6) ml_run_artifacts：把 RUN manifest、子 manifest 等都記錄
+        artifacts_all["run_manifest"] = run_manifest_path
+        artifacts_all["child_manifests"] = child_paths
+        insert_run_artifacts(cur, run_id, artifacts_all)
+
+        conn.commit()
         print(f"[OK] run_id={run_id} 已寫入資料庫。")
+
     except Exception as e:
-        dbc.rollback()
+        conn.rollback()
+        print(f"[ERROR] 交易失敗：{e}")
         raise
     finally:
-        dbc.close()
+        cur.close()
+        conn.close()
+
 
 if __name__ == "__main__":
     main()
