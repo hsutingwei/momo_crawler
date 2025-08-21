@@ -130,6 +130,78 @@ def eval_metrics(y_true, y_pred, y_score) -> dict:
     out.update({"auc_0": float(auc0), "auc_1": float(auc1)})
     return out
 
+def save_dataset_artifacts(outdir: str,
+                           mode: str,
+                           date_cutoff: str,
+                           vocab_mode: str,
+                           top_n_built: int,
+                           X_dense_df: pd.DataFrame,
+                           X_tfidf: csr_matrix,
+                           y: pd.Series,
+                           meta: pd.DataFrame,
+                           vocab: list) -> dict:
+    """
+    把目前載入好的資料集落地成暫存檔，回傳各檔案路徑（之後可寫進 DB）。
+    """
+    os.makedirs(outdir, exist_ok=True)
+    ds_dir = os.path.join(outdir, "datasets")
+    os.makedirs(ds_dir, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = f"dataset_{mode}_{date_cutoff.replace('-','')}_{vocab_mode}_top{top_n_built}_{stamp}"
+
+    p_Xdense = os.path.join(ds_dir, f"{base}_Xdense.csv")
+    p_Xtfidf = os.path.join(ds_dir, f"{base}_Xtfidf.npz")
+    p_y      = os.path.join(ds_dir, f"{base}_y.csv")
+    p_meta   = os.path.join(ds_dir, f"{base}_meta.csv")
+    p_vocab  = os.path.join(ds_dir, f"{base}_vocab.txt")
+    p_dsman  = os.path.join(ds_dir, f"{base}_manifest.json")
+
+    # 1) Dense features
+    X_dense_df.to_csv(p_Xdense, index=False, encoding="utf-8-sig")
+
+    # 2) 稀疏矩陣
+    save_npz(p_Xtfidf, X_tfidf)
+
+    # 3) y
+    y.to_frame("y").to_csv(p_y, index=False, encoding="utf-8-sig")
+
+    # 4) meta（建議保留 product_id / name / keyword 等辨識欄）
+    meta.to_csv(p_meta, index=False, encoding="utf-8-sig")
+
+    # 5) vocab
+    with open(p_vocab, "w", encoding="utf-8-sig") as f:
+        for t in vocab:
+            f.write(f"{t}\n")
+
+    # 6) dataset manifest
+    ds_manifest = {
+        "mode": mode,
+        "date_cutoff": date_cutoff,
+        "vocab_mode": vocab_mode,
+        "top_n_built": int(top_n_built),
+        "files": {
+            "Xdense_csv": p_Xdense,
+            "Xtfidf_npz": p_Xtfidf,
+            "y_csv": p_y,
+            "meta_csv": p_meta,
+            "vocab_txt": p_vocab
+        },
+        "shapes": {
+            "Xdense": list(X_dense_df.shape),
+            "Xtfidf": [int(X_tfidf.shape[0]), int(X_tfidf.shape[1])],
+            "y": int(y.shape[0]),
+            "vocab": int(len(vocab))
+        },
+        "dense_features": list(X_dense_df.columns),
+        "meta_columns": list(meta.columns)
+    }
+    with open(p_dsman, "w", encoding="utf-8-sig") as f:
+        json.dump(ds_manifest, f, ensure_ascii=False, indent=2)
+
+    ds_manifest["path"] = p_dsman
+    return ds_manifest
+
 def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str,
                     X_dense_df, X_tfidf, y, meta, vocab, outdir: str):
     # 組特徵
@@ -283,6 +355,19 @@ def main():
             vocab_scope="global",
         )
 
+    dataset_art = save_dataset_artifacts(
+        outdir=args.outdir,
+        mode=args.mode,
+        date_cutoff=args.date_cutoff,
+        vocab_mode=args.vocab_mode,
+        top_n_built=len(vocab),
+        X_dense_df=X_dense_df,
+        X_tfidf=X_tfidf,
+        y=y,
+        meta=meta,
+        vocab=vocab
+    )
+
     # 若要對每個 topN 都各跑一次：可在外層重建 vocab+X_tfidf；先給一個實用版本：Dense 同一份，TF 用同一 vocab
     os.makedirs(args.outdir, exist_ok=True)
     all_folds, all_summaries, manifests = [], [], []
@@ -321,8 +406,10 @@ def main():
         "cv": args.cv,
         "pipeline_version": args.pipeline_version,
         "exclude_products": excluded,
+        "dataset_manifest": dataset_art,
         "children": manifests
     }
+
     with open(os.path.join(args.outdir, f"{run_id}_RUN_manifest.json"), "w", encoding="utf-8-sig") as f:
         json.dump(run_manifest, f, ensure_ascii=False, indent=2)
 

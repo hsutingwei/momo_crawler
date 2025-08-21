@@ -27,3 +27,5 @@ fix_decreasing_report_*.csv
 sales_changes_analysis_*.csv
 *_商品資料.csv
 preprocess_v2
+/Model/load_training
+/Model/outputs
