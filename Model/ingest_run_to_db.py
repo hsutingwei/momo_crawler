@@ -14,6 +14,17 @@ Model/ingest_run_to_db.py
     --mode-short "商品層級：用 cutoff 前特徵預測 cutoff 後是否發生銷售增加" \
     --mode-long  "<放詳細說明>" \
     [--dry-run]
+
+# 方式一：指定 manifest
+python Model/ingest_run_to_db.py \
+--outdir Model/outputs \
+--manifest Model/outputs/run_manifest.json \
+--mode-code product_level \
+--mode-short "商品層級：用 cutoff 前特徵預測 cutoff 後是否發生銷售增加" \
+--mode-long "以商品為單位建模；特徵含 Dense 欄位（價格、關鍵字、媒體旗標、互動數…）及 cutoff 前彙整評論的 TF-IDF Top-N 詞彙(1/0)，目標 y=在 cutoff 以後任一批次銷售數量是否有『增加』。支援排除商品、10 折交叉驗證、特徵選擇等設定。"
+
+# 方式二：不指定 manifest，會從 outdir 找最新 run_manifest*.json
+python Model/ingest_run_to_db.py --outdir Model/outputs --mode-code product_level --mode-short "..." --mode-long "..."
 """
 import os
 import json
