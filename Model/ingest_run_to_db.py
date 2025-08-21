@@ -112,12 +112,18 @@ def insert_ml_run_feature(cur, run_id: str, family: str, name: str, params: Dict
 
 def insert_ml_run_algorithm(cur, run_id: str, algorithm: str, fs_method: str,
                             hyperparams: Dict[str, Any], notes: Optional[str] = None) -> int:
+    # 以 upsert 方式，不論新插入或衝突都回傳該列 id
     cur.execute("""
-        INSERT INTO ml_run_algorithms(run_id, algorithm, fs_method, hyperparams, notes)
+        INSERT INTO ml_run_algorithms (run_id, algorithm, fs_method, hyperparams, notes)
         VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (run_id, algorithm, fs_method)
+        DO UPDATE
+           SET hyperparams = EXCLUDED.hyperparams,
+               notes       = EXCLUDED.notes
         RETURNING id;
     """, (run_id, algorithm, fs_method, json.dumps(hyperparams), notes))
-    return cur.fetchone()[0]
+    alg_id = cur.fetchone()[0]
+    return alg_id
 
 
 def insert_fold_metrics_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
