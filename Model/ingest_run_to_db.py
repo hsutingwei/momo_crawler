@@ -174,6 +174,15 @@ def insert_summary_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         r = next(reader)  # 只有一列
+    
+    # 檢查 CSV 欄位並提供預設值
+    def safe_get_float(key: str, default: float = 0.0) -> float:
+        val = r.get(key, default)
+        try:
+            return float(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+    
     cur.execute("""
         INSERT INTO ml_run_summary(
           run_id, algorithm_id, folds,
@@ -189,40 +198,40 @@ def insert_summary_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
           %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s,
           %s, %s, %s, %s,
-          %s, %s, %s, %s, %s,
+          %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s,
           %s, %s, %s, %s
         );
     """, (
         run_id, algorithm_id, int(r.get("folds", 0)),
-        float(r.get("accuracy_mean", 0) or 0),
-        float(r.get("f1_macro_mean", 0) or 0),
-        float(r.get("f1_weighted_mean", 0) or 0),
-        float(r.get("precision_macro_mean", 0) or 0),
-        float(r.get("recall_macro_mean", 0) or 0),
-        float(r.get("auc_mean", 0) or 0),
-        float(r.get("precision_0_mean", 0) or 0),
-        float(r.get("recall_0_mean", 0) or 0),
-        float(r.get("f1_0_mean", 0) or 0),
-        float(r.get("auc_0_mean", 0) or 0),
-        float(r.get("precision_1_mean", 0) or 0),
-        float(r.get("recall_1_mean", 0) or 0),
-        float(r.get("f1_1_mean", 0) or 0),
-        float(r.get("auc_1_mean", 0) or 0),
-        float(r.get("accuracy_std", 0) or 0),
-        float(r.get("f1_macro_std", 0) or 0),
-        float(r.get("f1_weighted_std", 0) or 0),
-        float(r.get("precision_macro_std", 0) or 0),
-        float(r.get("recall_macro_std", 0) or 0),
-        float(r.get("auc_std", 0) or 0),
-        float(r.get("precision_0_std", 0) or 0),
-        float(r.get("recall_0_std", 0) or 0),
-        float(r.get("f1_0_std", 0) or 0),
-        float(r.get("auc_0_std", 0) or 0),
-        float(r.get("precision_1_std", 0) or 0),
-        float(r.get("recall_1_std", 0) or 0),
-        float(r.get("f1_1_std", 0) or 0),
-        float(r.get("auc_1_std", 0) or 0)
+        safe_get_float("accuracy_mean"),
+        safe_get_float("f1_macro_mean"),
+        safe_get_float("f1_weighted_mean"),
+        safe_get_float("precision_macro_mean"),
+        safe_get_float("recall_macro_mean"),
+        safe_get_float("auc_mean"),
+        safe_get_float("precision_0_mean"),
+        safe_get_float("recall_0_mean"),
+        safe_get_float("f1_0_mean"),
+        safe_get_float("auc_0_mean"),
+        safe_get_float("precision_1_mean"),
+        safe_get_float("recall_1_mean"),
+        safe_get_float("f1_1_mean"),
+        safe_get_float("auc_1_mean"),
+        safe_get_float("accuracy_std"),
+        safe_get_float("f1_macro_std"),
+        safe_get_float("f1_weighted_std"),
+        safe_get_float("precision_macro_std"),
+        safe_get_float("recall_macro_std"),
+        safe_get_float("auc_std"),
+        safe_get_float("precision_0_std"),
+        safe_get_float("recall_0_std"),
+        safe_get_float("f1_0_std"),
+        safe_get_float("auc_0_std"),
+        safe_get_float("precision_1_std"),
+        safe_get_float("recall_1_std"),
+        safe_get_float("f1_1_std"),
+        safe_get_float("auc_1_std")
     ))
 
 
@@ -335,39 +344,43 @@ def main():
         child_paths = find_child_manifests(outdir, run_id)
         child_manifests = [load_json(p) for p in child_paths]
 
-        # 4) ml_run_features：dense 與 tfidf（若存在於 run_manifest）
-        #   dense
-        dense_params = run_manifest.get("dense", {})
-        if dense_params:
-            insert_ml_run_feature(
-                cur, run_id,
-                family="dense",
-                name="dense_basic",
-                params=dense_params,
-                source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
-                version=run_manifest.get("pipeline_version"),
-                artifacts=None
-            )
+        # 4) ml_run_features：從 dataset_manifest 提取 dense 與 tfidf 參數
+        dataset_manifest = run_manifest.get("dataset_manifest", {})
+        if dataset_manifest:
+            # dense features
+            dense_features = dataset_manifest.get("dense_features", [])
+            if dense_features:
+                insert_ml_run_feature(
+                    cur, run_id,
+                    family="dense",
+                    name="dense_basic",
+                    params={"features": dense_features},
+                    source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
+                    version=run_manifest.get("pipeline_version"),
+                    artifacts=None
+                )
 
-        #   tfidf
-        tfidf_params = run_manifest.get("tfidf", {})
-        if tfidf_params:
-            tfidf_name = f"tfidf_{tfidf_params.get('vocab_mode', 'global')}_top{tfidf_params.get('top_n', 0)}"
-            art = {}
-            if "vocab_file" in tfidf_params:
-                art["vocab_file"] = tfidf_params["vocab_file"]
-            insert_ml_run_feature(
-                cur, run_id,
-                family="tfidf",
-                name=tfidf_name,
-                params={
-                    "vocab_mode": tfidf_params.get("vocab_mode"),
-                    "top_n": tfidf_params.get("top_n")
-                },
-                source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
-                version=run_manifest.get("pipeline_version"),
-                artifacts=art or None
-            )
+            # tfidf features
+            vocab_mode = dataset_manifest.get("vocab_mode")
+            top_n_built = dataset_manifest.get("top_n_built")
+            if vocab_mode and top_n_built:
+                tfidf_name = f"tfidf_{vocab_mode}_top{top_n_built}"
+                art = {}
+                vocab_file = dataset_manifest.get("files", {}).get("vocab_txt")
+                if vocab_file:
+                    art["vocab_file"] = vocab_file
+                insert_ml_run_feature(
+                    cur, run_id,
+                    family="tfidf",
+                    name=tfidf_name,
+                    params={
+                        "vocab_mode": vocab_mode,
+                        "top_n": top_n_built
+                    },
+                    source_window={"type": "pre_cutoff", "end": str(run_manifest.get("date_cutoff"))},
+                    version=run_manifest.get("pipeline_version"),
+                    artifacts=art or None
+                )
 
         # 5) ml_run_algorithms + 指標
         artifacts_all: Dict[str, Any] = {"children": []}
@@ -385,11 +398,16 @@ def main():
                 fs_method = "no_fs"
 
             hyper = cm.get("hyperparams", {})
-            alg_id = insert_ml_run_algorithm(cur, run_id, algo, fs_method, hyper)
+            
+            # 為 notes 欄位提供描述性文字
+            notes = f"Algorithm: {algo}, FS Method: {fs_method}, Top-N: {cm.get('top_n', 'N/A')}, CV: {cm.get('cv', 'N/A')}"
+            
+            alg_id = insert_ml_run_algorithm(cur, run_id, algo, fs_method, hyper, notes)
 
-            # fold_metrics.csv / summary.csv
-            fcsv = cm.get("fold_metrics_csv")
-            scsv = cm.get("summary_csv")
+            # fold_metrics.csv / summary.csv - 修正欄位名稱匹配
+            files = cm.get("files", {})
+            fcsv = files.get("fold_metrics") or cm.get("fold_metrics_csv")
+            scsv = files.get("summary") or cm.get("summary_csv")
 
             if fcsv and os.path.isfile(fcsv):
                 insert_fold_metrics_csv(cur, run_id, alg_id, fcsv)
