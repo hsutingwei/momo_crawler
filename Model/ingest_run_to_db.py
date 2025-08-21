@@ -26,7 +26,15 @@ python Model/ingest_run_to_db.py \
 # 方式二：不指定 manifest，會從 outdir 找最新 run_manifest*.json
 python Model/ingest_run_to_db.py --outdir Model/outputs --mode-code product_level --mode-short "..." --mode-long "..."
 """
+# --- 放在檔案最上面（原本 import 之前）---
+from pathlib import Path
+import sys
 import os
+# 專案根目錄 (…/momo_crawler-main)
+REPO_ROOT = Path(__file__).resolve().parent.parent  # .../Model -> 上一層 = 專案根目錄
+sys.path.insert(0, str(REPO_ROOT))
+print(f"[ingest] repo root = {REPO_ROOT}")
+
 import re
 import json
 import glob
@@ -40,18 +48,8 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
-# ---------- DB helpers ----------
-
-def get_db_conn():
-    load_dotenv()
-    conn = psycopg2.connect(
-        host=os.getenv("PG_HOST", "localhost"),
-        port=os.getenv("PG_PORT", "5432"),
-        dbname=os.getenv("PG_DB", "postgres"),
-        user=os.getenv("PG_USER", "postgres"),
-        password=os.getenv("PG_PASSWORD", "")
-    )
-    return conn
+# 沿用 csv_to_db.py 的連線方式
+from config.database import DatabaseConfig  # type: ignore
 
 
 def upsert_ml_mode(cur, code: str, short: str, long: str) -> int:
@@ -315,7 +313,8 @@ def main():
     run_manifest = load_json(run_manifest_path)
 
     # 連 DB
-    conn = get_db_conn()
+    db = DatabaseConfig()
+    conn = db.get_connection()
     conn.autocommit = False
     cur = conn.cursor()
 
