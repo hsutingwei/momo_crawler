@@ -238,7 +238,10 @@ def insert_summary_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
 def insert_run_artifacts(cur, run_id: str, artifacts: Dict[str, Any]):
     cur.execute("""
         INSERT INTO ml_run_artifacts(run_id, artifacts)
-        VALUES (%s, %s);
+        VALUES (%s, %s)
+        ON CONFLICT (run_id) DO UPDATE
+        SET artifacts = EXCLUDED.artifacts,
+            created_at = CURRENT_TIMESTAMP;
     """, (run_id, json.dumps(artifacts)))
 
 
