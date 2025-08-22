@@ -16,7 +16,8 @@ python Model/train.py \
   --fs-methods no_fs,lgbm_fs \
   --cv 10 \
   --exclude-products 8918452 \
-  --outdir Model/outputs
+  --outdir Model/outputs \
+  --oversample random
 """
 
 # -*- coding: utf-8-sig -*-
@@ -42,6 +43,15 @@ except Exception:
     HAS_LGBM = False
     LGBMClassifier = None
     warnings.warn("LightGBM 未安裝，將略過 LightGBM。")
+
+# imbalanced-learn
+try:
+    from imblearn.over_sampling import RandomOverSampler, SMOTE
+    HAS_IMB = True
+except Exception:
+    HAS_IMB = False
+    RandomOverSampler = None
+    SMOTE = None
 
 # XGBoost
 import xgboost as xgb
@@ -76,6 +86,9 @@ def parse_args():
     ap.add_argument("--exclude-products", type=str, default="8918452")   # 逗號分隔
     ap.add_argument("--keyword", type=str, default=None)                 # single_keyword 用
     ap.add_argument("--outdir", type=str, default="Model/outputs")
+    ap.add_argument("--oversample", type=str, default="none",
+                choices=["none", "random", "smote", "xgb_scale_pos_weight"],
+                help="類別不平衡處理：none/random/smote/xgb_scale_pos_weight（僅作用於訓練折）")
     return ap.parse_args()
 
 def std_scaler_to_sparse(Xdf: pd.DataFrame) -> csr_matrix:
@@ -214,7 +227,7 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
             tree_method="gpu_hist", predictor="gpu_predictor",
             n_estimators=800, learning_rate=0.05, max_depth=8,
             subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0, random_state=42,
-            scale_pos_weight=16
+            scale_pos_weight=args.suggested_spw if args.oversample == "xgb_scale_pos_weight" else None
         )
         needs_dense = False
     elif alg_name.lower() == "svm":
@@ -257,6 +270,22 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
             Xva_fit = Xva_fs.toarray()
         else:
             Xtr_fit, Xva_fit = Xtr_fs, Xva_fs
+
+                # ====== Oversampling（只對訓練資料做）======
+        if args.oversample != "none":
+            if not HAS_IMB:
+                warnings.warn("未安裝 imbalanced-learn，oversample 選項將被略過。請安裝 imbalanced-learn。")
+            else:
+                if args.oversample == "random":
+                    sampler = RandomOverSampler(random_state=42)
+                    # RandomOverSampler 可處理稀疏矩陣（保持原格式）
+                    Xtr_fit, ytr = sampler.fit_resample(Xtr_fit, ytr)
+                elif args.oversample == "smote":
+                    # SMOTE 需 dense
+                    Xtr_dense = Xtr_fit.toarray() if hasattr(Xtr_fit, "toarray") else Xtr_fit
+                    sampler = SMOTE(random_state=42, n_jobs=-1)
+                    Xtr_dense, ytr = sampler.fit_resample(Xtr_dense, ytr)
+                    Xtr_fit = Xtr_dense
 
         model.fit(Xtr_fit, ytr)
         y_pred = model.predict(Xva_fit)
@@ -349,7 +378,18 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
             "vocab": int(len(vocab))
         },
         "dense_features": list(X_dense_df.columns),
-        "vocab_preview": vocab[:10]
+        "vocab_preview": vocab[:10],
+        "imbalance": {
+            "oversample": args.oversample,          # none / random / smote
+            "applied_on": "train_folds"
+        },
+        "model_params": {
+            "algorithm": alg_name,
+            "fs_method": fs_method,
+            # 實際丟進去的參數（像 xgb 有開 scale_pos_weight 就會出現在這裡）
+            "params": getattr(model, "get_xgb_params", getattr(model, "get_params", lambda: {}))()
+                        if hasattr(model, "get_params") else {}
+        }
     }
     p_manifest = os.path.join(outdir, f"{base}_manifest.json")
     with open(p_manifest, "w", encoding="utf-8-sig") as f:
@@ -400,6 +440,16 @@ def main():
         vocab=vocab
     )
 
+    # === 類別分佈 & 建議權重 ===
+    pos = int((y == 1).sum())
+    neg = int((y == 0).sum())
+    total = int(len(y))
+    pos_ratio = (pos / total) if total else 0.0
+    suggested_spw = (neg / pos) if pos > 0 else None  # XGBoost 推薦 scale_pos_weight
+
+    args.suggested_spw = suggested_spw  # 讓子函式可用
+    args.pos = pos; args.neg = neg; args.pos_ratio = pos_ratio
+
     # 若要對每個 topN 都各跑一次：可在外層重建 vocab+X_tfidf；先給一個實用版本：Dense 同一份，TF 用同一 vocab
     os.makedirs(args.outdir, exist_ok=True)
     all_folds, all_summaries, manifests = [], [], []
@@ -439,7 +489,20 @@ def main():
         "pipeline_version": args.pipeline_version,
         "exclude_products": excluded,
         "dataset_manifest": dataset_art,
-        "children": manifests
+        "children": manifests,
+        "imbalance_config": {
+            "oversample": args.oversample,            # none / random / smote
+            "target_distribution": {
+                "pos": pos, "neg": neg,
+                "total": total, "pos_ratio": pos_ratio
+            },
+            "suggested_weights": {
+                "xgboost": {"scale_pos_weight": suggested_spw},
+                # 如果你之後要在 SVM/LightGBM 啟用 class_weight 也能在這裡寫下建議值
+                # "svm": {"class_weight": "balanced"},
+                # "lightgbm": {"is_unbalance": True}
+            }
+        }
     }
 
     with open(os.path.join(args.outdir, f"{run_id}_RUN_manifest.json"), "w", encoding="utf-8-sig") as f:
