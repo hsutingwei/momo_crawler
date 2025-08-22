@@ -213,7 +213,8 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         model = xgb.XGBClassifier(
             tree_method="gpu_hist", predictor="gpu_predictor",
             n_estimators=800, learning_rate=0.05, max_depth=8,
-            subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0, random_state=42
+            subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0, random_state=42,
+            scale_pos_weight=16
         )
         needs_dense = False
     elif alg_name.lower() == "svm":
