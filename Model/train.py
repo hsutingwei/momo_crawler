@@ -235,9 +235,13 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     skf = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=42)
     fold_rows = []
 
+    # 收集所有預測結果
+    all_predictions = []
+    
     for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y)), y)):
         Xtr, Xva = X_all[tr_idx], X_all[va_idx]
         ytr, yva = y.iloc[tr_idx], y.iloc[va_idx]
+        meta_va = meta.iloc[va_idx]  # 驗證集的 meta 資料
 
         # FS
         if fs_method == "lgbm_fs":
@@ -257,6 +261,20 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         y_pred = model.predict(Xva_fit)
         y_score = get_positive_score(model, Xva_fit)
         m = eval_metrics(yva, y_pred, y_score)
+        
+        # 收集這一折的預測結果
+        for i, (true_val, pred_val, score_val) in enumerate(zip(yva, y_pred, y_score)):
+            pred_row = {
+                "run_id": run_id,
+                "fold": fold,
+                "product_id": int(meta_va.iloc[i].get("product_id", 0)),
+                "keyword": meta_va.iloc[i].get("keyword", ""),
+                "y_true": int(true_val),
+                "y_pred": int(pred_val),
+                "y_score": float(score_val)
+            }
+            all_predictions.append(pred_row)
+        
         row = {
             "run_id": run_id,
             "fold": fold,
@@ -291,10 +309,26 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     base = f"run_{args.date_cutoff.replace('-','')}_{args.vocab_mode}_top{top_n}_{alg_name}_{fs_method}_{stamp}"
     p_folds   = os.path.join(outdir, f"{base}_fold_metrics.csv")
     p_summary = os.path.join(outdir, f"{base}_summary.csv")
+    p_predictions = os.path.join(outdir, f"{base}_predictions.csv")
+    
     df_folds.to_csv(p_folds, index=False, encoding="utf-8-sig")
     df_summary.to_csv(p_summary, index=False, encoding="utf-8-sig")
+    
+    # 保存預測結果
+    if all_predictions:
+        df_predictions = pd.DataFrame(all_predictions)
+        df_predictions.to_csv(p_predictions, index=False, encoding="utf-8-sig")
+    else:
+        p_predictions = None
 
     # manifest（方便之後寫 DB）
+    files_dict = {
+        "fold_metrics": p_folds,
+        "summary": p_summary
+    }
+    if p_predictions:
+        files_dict["predictions"] = p_predictions
+    
     manifest = {
         "run_id": run_id,
         "date_cutoff": args.date_cutoff,
@@ -306,10 +340,7 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         "cv": args.cv,
         "pipeline_version": args.pipeline_version,
         "excluded_products": [int(x) for x in (args.exclude_products.split(",") if args.exclude_products else [])],
-        "files": {
-            "fold_metrics": p_folds,
-            "summary": p_summary
-        },
+        "files": files_dict,
         "shapes": {
             "X_dense": list(X_dense_df.shape),
             "X_tfidf": [int(X_tfidf.shape[0]), int(X_tfidf.shape[1])],
