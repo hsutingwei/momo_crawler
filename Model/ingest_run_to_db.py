@@ -83,7 +83,8 @@ def insert_ml_run(cur, run_manifest: Dict[str, Any], mode_id: int) -> str:
         "excluded_products": run_manifest.get("excluded_products", []),
         "notes": run_manifest.get("notes"),
         "fs_methods": run_manifest.get("fs_methods", []),  # 總 manifest 若沒有，也沒關係
-        "algorithms": run_manifest.get("algorithms", [])
+        "algorithms": run_manifest.get("algorithms", []),
+        "imbalance_config": run_manifest.get("imbalance_config")
     }
 
     cur.execute("""
@@ -426,7 +427,12 @@ def main():
             else:
                 fs_method = "no_fs"
 
-            hyper = cm.get("hyperparams", {})
+            # 兼容兩種結構：優先使用 train.py 子 manifest 的 "model_params"
+            mp = cm.get("model_params", {})
+            if isinstance(mp, dict) and "params" in mp:
+                hyper = mp["params"]               # 真正的模型參數（含 scale_pos_weight）
+            else:
+                hyper = cm.get("hyperparams", {})  # 舊欄位或其它來源的參數
             
             # 為 notes 欄位提供描述性文字
             notes = f"Algorithm: {algo}, FS Method: {fs_method}, Top-N: {cm.get('top_n', 'N/A')}, CV: {cm.get('cv', 'N/A')}"
