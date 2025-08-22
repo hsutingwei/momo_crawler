@@ -497,7 +497,7 @@ def main():
                 "total": total, "pos_ratio": pos_ratio
             },
             "suggested_weights": {
-                "xgboost": {"scale_pos_weight": suggested_spw},
+                "xgboost": {"scale_pos_weight": suggested_spw if args.oversample == "xgb_scale_pos_weight" else None},
                 # 如果你之後要在 SVM/LightGBM 啟用 class_weight 也能在這裡寫下建議值
                 # "svm": {"class_weight": "balanced"},
                 # "lightgbm": {"is_unbalance": True}
