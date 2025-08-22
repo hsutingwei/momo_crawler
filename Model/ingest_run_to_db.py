@@ -235,6 +235,35 @@ def insert_summary_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
     ))
 
 
+def insert_predictions_csv(cur, run_id: str, algorithm_id: int, csv_path: str):
+    """插入預測結果到 ml_predictions 表"""
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    
+    for r in rows:
+        cur.execute("""
+            INSERT INTO ml_predictions(
+              run_id, algorithm_id, fold, product_id, keyword, 
+              y_true, y_pred, y_score
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id, algorithm_id, fold, product_id) DO UPDATE
+            SET keyword = EXCLUDED.keyword,
+                y_true = EXCLUDED.y_true,
+                y_pred = EXCLUDED.y_pred,
+                y_score = EXCLUDED.y_score;
+        """, (
+            run_id, algorithm_id,
+            int(r.get("fold", 0)),
+            int(r.get("product_id", 0)),
+            r.get("keyword", ""),
+            int(r.get("y_true", 0)),
+            int(r.get("y_pred", 0)),
+            float(r.get("y_score", 0.0) or 0.0)
+        ))
+
+
 def insert_run_artifacts(cur, run_id: str, artifacts: Dict[str, Any]):
     cur.execute("""
         INSERT INTO ml_run_artifacts(run_id, artifacts)
@@ -407,15 +436,18 @@ def main():
             
             alg_id = insert_ml_run_algorithm(cur, run_id, algo, fs_method, hyper, notes)
 
-            # fold_metrics.csv / summary.csv - 修正欄位名稱匹配
+            # fold_metrics.csv / summary.csv / predictions.csv - 修正欄位名稱匹配
             files = cm.get("files", {})
             fcsv = files.get("fold_metrics") or cm.get("fold_metrics_csv")
             scsv = files.get("summary") or cm.get("summary_csv")
+            pcsv = files.get("predictions") or cm.get("predictions_csv")
 
             if fcsv and os.path.isfile(fcsv):
                 insert_fold_metrics_csv(cur, run_id, alg_id, fcsv)
             if scsv and os.path.isfile(scsv):
                 insert_summary_csv(cur, run_id, alg_id, scsv)
+            if pcsv and os.path.isfile(pcsv):
+                insert_predictions_csv(cur, run_id, alg_id, pcsv)
 
             artifacts_all["children"].append({
                 "manifest": cpath,
