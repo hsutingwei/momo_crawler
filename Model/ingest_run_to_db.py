@@ -321,10 +321,35 @@ def safe_get_fs_methods(run_manifest: Dict[str, Any], child_manifests: List[Dict
     return list(dict.fromkeys(acc))
 
 
-def find_child_manifests(outdir: str, run_id: str) -> List[str]:
+def find_child_manifests(outdir: str, run_id: str, manifest_path: str = None, run_manifest: Dict[str, Any] = None) -> List[str]:
     """
     尋找子 manifest：命名通常像 run_..._manifest.json（但不含 RUN_manifest）
+    
+    Args:
+        outdir: 輸出目錄
+        run_id: 執行 ID
+        manifest_path: 指定的 RUN manifest 路徑，如果提供則根據其修改時間找對應的子檔案
+        run_manifest: RUN manifest 的內容，如果提供則優先使用其中的 children 欄位
     """
+    # 優先使用 RUN manifest 中的 children 欄位
+    if run_manifest and "children" in run_manifest:
+        children_paths = run_manifest["children"]
+        # 檢查檔案是否存在
+        existing_paths = []
+        for child_path in children_paths:
+            if os.path.isfile(child_path):
+                existing_paths.append(child_path)
+            else:
+                # 如果路徑不存在，嘗試在 outdir 中尋找
+                child_filename = os.path.basename(child_path)
+                potential_path = os.path.join(outdir, child_filename)
+                if os.path.isfile(potential_path):
+                    existing_paths.append(potential_path)
+        
+        if existing_paths:
+            return existing_paths
+    
+    # 如果沒有 children 欄位或檔案不存在，使用檔案搜尋
     pats = [
         os.path.join(outdir, f"*{run_id}*manifest.json"),
         os.path.join(outdir, "run_*_manifest.json"),
@@ -337,7 +362,42 @@ def find_child_manifests(outdir: str, run_id: str) -> List[str]:
     allc = [p for p in allc if "_RUN_manifest.json" not in p and os.path.basename(p) != "RUN_manifest.json"]
     # 去重
     uniq = list(dict.fromkeys(allc))
-    return uniq
+    
+    if not uniq:
+        return []
+    
+    # 如果沒有指定 manifest_path，找最新的檔案
+    if not manifest_path:
+        # 按修改時間排序，取最新的
+        uniq.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return [uniq[0]]  # 只返回最新的一個
+    
+    # 如果有指定 manifest_path，根據 RUN manifest 的修改時間找對應的子檔案
+    try:
+        run_mtime = os.path.getmtime(manifest_path)
+        
+        # 找出修改時間最接近 RUN manifest 的檔案
+        # 由於 train.py 在同一時間點產生所有檔案，理論上時間差應該很小
+        matching_files = []
+        for file_path in uniq:
+            file_mtime = os.path.getmtime(file_path)
+            time_diff = abs(file_mtime - run_mtime)
+            
+            # 如果時間差在 5 秒內，認為是同一批次
+            if time_diff <= 5:
+                matching_files.append(file_path)
+        
+        if matching_files:
+            return matching_files
+        else:
+            # 如果找不到對應時間的檔案，回退到找最新的
+            uniq.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            return [uniq[0]]
+            
+    except (OSError, FileNotFoundError):
+        # 如果無法取得 RUN manifest 的修改時間，回退到找最新的
+        uniq.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return [uniq[0]]
 
 
 # ---------- main flow ----------
@@ -371,7 +431,7 @@ def main():
         run_id = insert_ml_run(cur, run_manifest, mode_id)
 
         # 3) 子 manifest 列出來
-        child_paths = find_child_manifests(outdir, run_id)
+        child_paths = find_child_manifests(outdir, run_id, run_manifest_path, run_manifest)
         child_manifests = [load_json(p) for p in child_paths]
 
         # 4) ml_run_features：從 dataset_manifest 提取 dense 與 tfidf 參數
