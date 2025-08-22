@@ -417,7 +417,7 @@ def main():
         # 5) ml_run_algorithms + 指標
         artifacts_all: Dict[str, Any] = {"children": []}
         for cpath, cm in zip(child_paths, child_manifests):
-            algo = cm.get("algorithm") or cm.get("alg") or "unknown"
+            algo = cm.get("algorithm") or cm.get("alg") or cm.get("algorithms") or "unknown"
             # ★ 兼容 fs_method 與 fs_methods
             fs_method = None
             if "fs_method" in cm:
