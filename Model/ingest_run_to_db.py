@@ -10,7 +10,6 @@ Model/ingest_run_to_db.py
   python Model/ingest_run_to_db.py \
     --outdir Model/outputs \
     --manifest Model/outputs/run_manifest.json \
-    --mode-code product_level \
     --mode-short "商品層級：用 cutoff 前特徵預測 cutoff 後是否發生銷售增加" \
     --mode-long  "<放詳細說明>" \
     [--dry-run]
@@ -19,12 +18,11 @@ Model/ingest_run_to_db.py
 python Model/ingest_run_to_db.py \
 --outdir Model/outputs \
 --manifest Model/outputs/run_manifest.json \
---mode-code product_level \
 --mode-short "商品層級：用 cutoff 前特徵預測 cutoff 後是否發生銷售增加" \
 --mode-long "以商品為單位建模；特徵含 Dense 欄位（價格、關鍵字、媒體旗標、互動數…）及 cutoff 前彙整評論的 TF-IDF Top-N 詞彙(1/0)，目標 y=在 cutoff 以後任一批次銷售數量是否有『增加』。支援排除商品、10 折交叉驗證、特徵選擇等設定。"
 
 # 方式二：不指定 manifest，會從 outdir 找最新 run_manifest*.json
-python Model/ingest_run_to_db.py --outdir Model/outputs --mode-code product_level --mode-short "..." --mode-long "..."
+python Model/ingest_run_to_db.py --outdir Model/outputs --mode-short "..." --mode-long "..."
 """
 # --- 放在檔案最上面（原本 import 之前）---
 from pathlib import Path
@@ -33,7 +31,6 @@ import os
 # 專案根目錄 (…/momo_crawler-main)
 REPO_ROOT = Path(__file__).resolve().parent.parent  # .../Model -> 上一層 = 專案根目錄
 sys.path.insert(0, str(REPO_ROOT))
-print(f"[ingest] repo root = {REPO_ROOT}")
 
 import re
 import json
@@ -350,11 +347,11 @@ def main():
     )
     ap.add_argument("--outdir", required=True, help="train.py 寫出檔案的資料夾")
     ap.add_argument("--manifest", required=False, help="指定 RUN manifest 路徑（可省略，會自動尋找最新）")
-    ap.add_argument("--mode-code", required=True, help="模式代碼（如 product_level）")
     ap.add_argument("--mode-short", required=True, help="模式簡述")
     ap.add_argument("--mode-long", required=True, help="模式詳述")
     args = ap.parse_args()
 
+    code = str(uuid.uuid4())
     outdir = args.outdir
     run_manifest_path = find_manifest(outdir, args.manifest)
     run_manifest = load_json(run_manifest_path)
@@ -367,7 +364,7 @@ def main():
 
     try:
         # 1) ml_modes
-        mode_id = upsert_ml_mode(cur, args.mode_code, args.mode_short, args.mode_long)
+        mode_id = upsert_ml_mode(cur, code, args.mode_short, args.mode_long)
 
         # 2) ml_runs
         run_id = insert_ml_run(cur, run_manifest, mode_id)
