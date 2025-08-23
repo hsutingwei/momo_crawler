@@ -86,8 +86,17 @@ def main():
         artifacts["visualization_path"] = args.viz
 
     data_summary = payload.get("data_summary") or {}
-    dense_stats = payload.get("dense_feature_stats") or []
-    viz = payload.get("visualizations") or []
+    # 修正：JSON 結構中特徵統計在 feature_analysis.feature_analysis
+    feature_analysis = payload.get("feature_analysis", {})
+    dense_stats = feature_analysis.get("feature_analysis", [])
+    # 修正：JSON 結構中視覺化在 visualization_analysis.visualization_results
+    viz_analysis = payload.get("visualization_analysis", {})
+    viz_results = viz_analysis.get("visualization_results", {})
+    # 將字典格式轉換為列表格式，每個視覺化方法作為一個項目
+    viz = []
+    for viz_type, viz_data in viz_results.items():
+        viz_data['type'] = viz_type  # 添加類型標識
+        viz.append(viz_data)
 
     mode_code = cfg.get("mode", "product_level")
     date_cutoff = to_date(cfg["date_cutoff"])
@@ -192,9 +201,16 @@ def main():
                 vtype = (v.get("type") or "").lower()  # 'pca'|'tsne'|'umap'
                 meta = dict(v)
                 sep_score = v.get("separation_score")
-                explained_1 = v.get("explained_variance_ratio", {}).get("pc1")
-                explained_2 = v.get("explained_variance_ratio", {}).get("pc2")
-                cumulative = v.get("explained_variance_ratio", {}).get("pc1_pc2_cumulative")
+                
+                # 修正：explained_variance_ratio 是列表，不是字典
+                explained_variance_ratio = v.get("explained_variance_ratio", [])
+                explained_1 = explained_variance_ratio[0] if len(explained_variance_ratio) > 0 else None
+                explained_2 = explained_variance_ratio[1] if len(explained_variance_ratio) > 1 else None
+                
+                # 修正：cumulative_variance_ratio 是列表，取第一個值
+                cumulative_variance_ratio = v.get("cumulative_variance_ratio", [])
+                cumulative = cumulative_variance_ratio[0] if len(cumulative_variance_ratio) > 0 else None
+                
                 plot_path = v.get("plot_path") or (artifacts.get("visualization_path") if isinstance(artifacts, dict) else None) or args.viz
                 viz_rows.append((
                     analysis_id, vtype, sep_score, explained_1, explained_2, cumulative,
