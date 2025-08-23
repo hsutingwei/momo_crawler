@@ -220,10 +220,22 @@ def main():
         for code in codes:
             rows = fetch_runs_for_code(cur, code)
             for r in rows:
+                # r is a tuple: (run_id, algorithm_id, auc_mean, pr1_mean, rc1_mean, f1_1_mean)
+                # Convert Decimal to float for JSON serialization
+                def decimal_to_float(value):
+                    if value is None:
+                        return None
+                    return float(value)
+                
                 rr_rows.append((
-                    analysis_id, code, r["run_id"], r["algorithm_id"],
-                    r.get("auc_mean"), r.get("pr1_mean"), r.get("rc1_mean"), r.get("f1_1_mean"),
-                    json.dumps({k: r[k] for k in r if k not in ("run_id","algorithm_id")}, ensure_ascii=False)
+                    analysis_id, code, r[0], r[1],  # run_id, algorithm_id
+                    r[2], r[3], r[4], r[5],  # auc_mean, pr1_mean, rc1_mean, f1_1_mean
+                    json.dumps({
+                        "auc_mean": decimal_to_float(r[2]), 
+                        "pr1_mean": decimal_to_float(r[3]), 
+                        "rc1_mean": decimal_to_float(r[4]), 
+                        "f1_1_mean": decimal_to_float(r[5])
+                    }, ensure_ascii=False)
                 ))
         if rr_rows:
             pgx.execute_values(cur, """
@@ -234,6 +246,7 @@ def main():
             """, rr_rows)
 
         print(f"[OK] analysis_id={analysis_id} 匯入完成（含 codes→runs 關聯）。")
+        conn.commit()  # 提交事務
     finally:
         conn.close()
 
