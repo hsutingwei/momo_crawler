@@ -1,4 +1,4 @@
-# -*- coding: utf-8-sig -*-
+# -*- coding: utf-8-sig-sig -*-
 """
 Model/feature_analysis.py
 特徵分析工具：驗證特徵是否足以區分類別
@@ -545,13 +545,13 @@ def main():
             return obj
     
     json_safe_results = make_json_safe(analysis_results)
-    with open(detailed_results_path, 'w', encoding='utf-8') as f:
+    with open(detailed_results_path, 'w', encoding='utf-8-sig') as f:
         json.dump(json_safe_results, f, ensure_ascii=False, indent=2)
     
     # 保存資料庫格式
     db_format_path = os.path.join(args.outdir, f"feature_analysis_db_ready_{timestamp}.json")
     json_safe_db_format = make_json_safe(db_format)
-    with open(db_format_path, 'w', encoding='utf-8') as f:
+    with open(db_format_path, 'w', encoding='utf-8-sig') as f:
         json.dump(json_safe_db_format, f, ensure_ascii=False, indent=2)
     
     print(f"\n=== 分析完成 ===")
