@@ -283,7 +283,7 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
                 elif args.oversample == "smote":
                     # SMOTE 需 dense
                     Xtr_dense = Xtr_fit.toarray() if hasattr(Xtr_fit, "toarray") else Xtr_fit
-                    sampler = SMOTE(random_state=42, n_jobs=-1)
+                    sampler = SMOTE(random_state=42)
                     Xtr_dense, ytr = sampler.fit_resample(Xtr_dense, ytr)
                     Xtr_fit = Xtr_dense
 
