@@ -187,8 +187,8 @@ def analyze_dense_feature_distributions(X_dense_df: pd.DataFrame, y: pd.Series) 
                 "overlap_coefficient": float(overlap_coef)
             },
             "significance": {
-                "is_significant": is_significant,
-                "has_high_separation": has_high_separation
+                "is_significant": int(is_significant),
+                "has_high_separation": int(has_high_separation)
             }
         }
         
@@ -528,13 +528,31 @@ def main():
     
     # 保存詳細結果
     detailed_results_path = os.path.join(args.outdir, f"feature_analysis_detailed_{timestamp}.json")
+    
+    # 創建 JSON 安全的版本（轉換 bool 為 int）
+    def make_json_safe(obj):
+        if isinstance(obj, dict):
+            return {k: make_json_safe(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [make_json_safe(item) for item in obj]
+        elif isinstance(obj, bool):
+            return int(obj)
+        elif isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+    
+    json_safe_results = make_json_safe(analysis_results)
     with open(detailed_results_path, 'w', encoding='utf-8') as f:
-        json.dump(analysis_results, f, ensure_ascii=False, indent=2)
+        json.dump(json_safe_results, f, ensure_ascii=False, indent=2)
     
     # 保存資料庫格式
     db_format_path = os.path.join(args.outdir, f"feature_analysis_db_ready_{timestamp}.json")
+    json_safe_db_format = make_json_safe(db_format)
     with open(db_format_path, 'w', encoding='utf-8') as f:
-        json.dump(db_format, f, ensure_ascii=False, indent=2)
+        json.dump(json_safe_db_format, f, ensure_ascii=False, indent=2)
     
     print(f"\n=== 分析完成 ===")
     print(f"特徵充分性評分: {conclusions['feature_sufficiency_score']:.1f}/100")
