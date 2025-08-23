@@ -7,18 +7,8 @@
 用法示例：
 python ingest_feature_analysis.py \
   --json Model/analysis_outputs/feature_analysis_db_ready_20250823_164614.json \
-  --viz Model/analysis_outputs/feature_visualization_20250823_164614.svg \
-  --codes product_level,d0dca4c6-aad9-47b8-b5f7-3671208c31d6,dc7dd570-0446-41e3-8511-fdc83ea1af69,8b0f585b-642a-402d-a7f3-c3363a40614b \
-  --runs-map Model/analysis_outputs/runs_map.json
-
-runs_map.json (optional) 範例：
-{
-  "product_level": [
-    {"run_id": "8632cd22-...-d9a", "algorithm_id": 101},
-    {"run_id": "ffe61f55-...-5c5", "algorithm_id": 102}
-  ],
-  "d0dca4c6-aad9-...": [{"run_id": "...", "algorithm_id": 201}]
-}
+  --viz  Model/analysis_outputs/feature_visualization_20250823_164614.svg \
+  --codes product_level,d0dca4c6-aad9-47b8-b5f7-3671208c31d6,dc7dd570-0446-41e3-8511-fdc83ea1af69,8b0f585b-642a-402d-a7f3-c3363a40614b
 """
 
 from pathlib import Path
