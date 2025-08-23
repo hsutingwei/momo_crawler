@@ -29,3 +29,4 @@ sales_changes_analysis_*.csv
 preprocess_v2
 /Model/load_training
 /Model/outputs
+/Model/analysis_outputs
