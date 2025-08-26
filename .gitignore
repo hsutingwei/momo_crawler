@@ -30,3 +30,4 @@ preprocess_v2
 /Model/load_training
 /Model/outputs
 /Model/analysis_outputs
+/Model/embeddings/outputs
