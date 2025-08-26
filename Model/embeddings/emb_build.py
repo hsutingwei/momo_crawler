@@ -86,20 +86,44 @@ def encode_sentences(model, texts: List[str], batch_size: int = 32,
         logger.warning("No valid texts found")
         return np.zeros((len(texts), model.get_sentence_embedding_dimension()))
     
-    # Encode in batches
+    # Encode in batches with progress tracking
     embeddings = []
+    total_batches = (len(valid_texts) + batch_size - 1) // batch_size
+    
     for i in range(0, len(valid_texts), batch_size):
+        batch_num = i // batch_size + 1
         batch_texts = valid_texts[i:i + batch_size]
-        batch_embeddings = model.encode(
-            batch_texts,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-            fp16=fp16
-        )
-        embeddings.append(batch_embeddings)
+        
+        logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch_texts)} texts)")
+        
+        try:
+            batch_embeddings = model.encode(
+                batch_texts,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+                fp16=fp16
+            )
+            embeddings.append(batch_embeddings)
+            
+            # Log memory usage every 10 batches
+            if batch_num % 10 == 0:
+                import psutil
+                memory_usage = psutil.virtual_memory().percent
+                logger.info(f"Memory usage: {memory_usage:.1f}%")
+                
+        except Exception as e:
+            logger.error(f"Error in batch {batch_num}: {e}")
+            # Create zero vectors for failed batch
+            zero_batch = np.zeros((len(batch_texts), model.get_sentence_embedding_dimension()))
+            embeddings.append(zero_batch)
     
     # Combine all batches
-    all_embeddings = np.vstack(embeddings)
+    try:
+        all_embeddings = np.vstack(embeddings)
+    except Exception as e:
+        logger.error(f"Error combining batches: {e}")
+        # Fallback: create zero matrix
+        all_embeddings = np.zeros((len(valid_texts), model.get_sentence_embedding_dimension()))
     
     # Create full matrix with zeros for empty texts
     full_embeddings = np.zeros((len(texts), all_embeddings.shape[1]))
