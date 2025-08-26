@@ -251,6 +251,57 @@ def encode_tokens(word_model, tokens_list: List[List[str]],
     return embeddings, oov_ratio, idf_coverage
 
 
+def aggregate_product_embeddings(comment_ids: List[str], product_ids: List[int], 
+                                embeddings: np.ndarray, 
+                                aggregation_method: str = 'mean') -> Tuple[List[int], np.ndarray, List[List[str]]]:
+    """
+    Aggregate comment-level embeddings to product-level.
+    
+    Args:
+        comment_ids: List of comment IDs
+        product_ids: List of product IDs
+        embeddings: Comment-level embeddings (N, dim)
+        aggregation_method: 'mean', 'max', 'min', or 'concat'
+    
+    Returns:
+        Tuple of (unique_product_ids, product_embeddings, comment_groups)
+    """
+    from collections import defaultdict
+    
+    # Group by product_id
+    product_groups = defaultdict(list)
+    for i, (comment_id, product_id) in enumerate(zip(comment_ids, product_ids)):
+        product_groups[product_id].append((comment_id, embeddings[i]))
+    
+    unique_product_ids = []
+    product_embeddings = []
+    comment_groups = []
+    
+    for product_id in sorted(product_groups.keys()):
+        group = product_groups[product_id]
+        comment_ids_group = [item[0] for item in group]
+        embeddings_group = np.array([item[1] for item in group])
+        
+        # Aggregate embeddings
+        if aggregation_method == 'mean':
+            product_embedding = np.mean(embeddings_group, axis=0)
+        elif aggregation_method == 'max':
+            product_embedding = np.max(embeddings_group, axis=0)
+        elif aggregation_method == 'min':
+            product_embedding = np.min(embeddings_group, axis=0)
+        elif aggregation_method == 'concat':
+            # Concatenate all embeddings (flatten)
+            product_embedding = embeddings_group.flatten()
+        else:
+            raise ValueError(f"Unknown aggregation method: {aggregation_method}")
+        
+        unique_product_ids.append(product_id)
+        product_embeddings.append(product_embedding)
+        comment_groups.append(comment_ids_group)
+    
+    return unique_product_ids, np.array(product_embeddings), comment_groups
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate embedding features from comments')
     
@@ -286,6 +337,8 @@ def main():
     parser.add_argument('--device', choices=['cuda', 'cpu', 'auto'], default='auto',
                        help='Device for processing')
     parser.add_argument('--fp16', action='store_true', help='Use FP16 for sentence transformers')
+    parser.add_argument('--product-aggregation', choices=['mean', 'max', 'min', 'concat'], 
+                       default='mean', help='Aggregation method for product-level mode')
     
     # Output parameters
     parser.add_argument('--outdir', type=str, default='outputs',
@@ -391,31 +444,60 @@ def main():
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
         
+        # Handle product-level aggregation if needed
+        if args.mode == 'product_level':
+            logger.info(f"Aggregating to product level using {args.product_aggregation} method")
+            unique_product_ids, product_embeddings, comment_groups = aggregate_product_embeddings(
+                comment_ids, product_ids, embeddings, args.product_aggregation
+            )
+            
+            # Update variables for product-level output
+            final_embeddings = product_embeddings
+            final_ids = unique_product_ids
+            final_texts = [f"Product {pid} ({len(group)} comments)" for pid, group in zip(unique_product_ids, comment_groups)]
+            
+            logger.info(f"Aggregated {len(comment_ids)} comments into {len(unique_product_ids)} products")
+        else:
+            # Comment-level mode
+            final_embeddings = embeddings
+            final_ids = comment_ids
+            final_texts = texts
+        
         # Save outputs
-        n_samples, dim = embeddings.shape
+        n_samples, dim = final_embeddings.shape
         
         # Save embedding matrix
         embed_path = os.path.join(outdir, 'X_embed.npz')
-        save_npz_compressed(embed_path, embeddings)
+        save_npz_compressed(embed_path, final_embeddings)
         
         # Create meta.csv
         meta_data = []
-        for i, (comment_id, product_id, capture_time) in enumerate(zip(comment_ids, product_ids, capture_times)):
-            if use_sentence_emb:
-                # For sentence embeddings, count words in text
-                text = texts[i] if i < len(texts) else ""
-                n_tokens = len(text.split()) if text else 0
-            else:
-                # For word embeddings, count tokens from tokenization
-                tokens = tokens_list[i] if i < len(tokens_list) else []
-                n_tokens = len(tokens)
-            meta_data.append((i, comment_id, product_id, capture_time, n_tokens))
+        if args.mode == 'product_level':
+            # Product-level metadata
+            for i, (product_id, comment_group) in enumerate(zip(final_ids, comment_groups)):
+                n_comments = len(comment_group)
+                meta_data.append((i, f"product_{product_id}", product_id, None, n_comments))
+        else:
+            # Comment-level metadata
+            for i, (comment_id, product_id, capture_time) in enumerate(zip(comment_ids, product_ids, capture_times)):
+                if use_sentence_emb:
+                    # For sentence embeddings, count words in text
+                    text = texts[i] if i < len(texts) else ""
+                    n_tokens = len(text.split()) if text else 0
+                else:
+                    # For word embeddings, count tokens from tokenization
+                    tokens = tokens_list[i] if i < len(tokens_list) else []
+                    n_tokens = len(tokens)
+                meta_data.append((i, comment_id, product_id, capture_time, n_tokens))
         
         meta_path = os.path.join(outdir, 'meta.csv')
-        save_csv(meta_path, meta_data, ['row_ix', 'comment_id', 'product_id', 'capture_time', 'n_tokens'])
+        if args.mode == 'product_level':
+            save_csv(meta_path, meta_data, ['row_ix', 'product_id_str', 'product_id', 'capture_time', 'n_comments'])
+        else:
+            save_csv(meta_path, meta_data, ['row_ix', 'comment_id', 'product_id', 'capture_time', 'n_tokens'])
         
         # Create sample preview
-        preview_data = preview_rows(comment_ids, texts, embeddings)
+        preview_data = preview_rows(final_ids, final_texts, final_embeddings)
         preview_path = os.path.join(outdir, 'sample_preview.csv')
         save_csv(preview_path, preview_data, ['comment_id', 'text_head', 'vec_head'])
         
@@ -425,6 +507,11 @@ def main():
             'X_embed': 'X_embed.npz',
             'preview': 'sample_preview.csv'
         }
+        
+        # Add aggregation info to notes
+        notes = "local-only; no DB write"
+        if args.mode == 'product_level':
+            notes += f"; product aggregation: {args.product_aggregation}"
         
         manifest = create_manifest(
             run_name=args.run_name,
@@ -445,7 +532,7 @@ def main():
             dim=dim,
             batch_size=args.batch_size,
             files=files,
-            notes="local-only; no DB write"
+            notes=notes
         )
         
         manifest_path = os.path.join(outdir, 'manifest.json')
