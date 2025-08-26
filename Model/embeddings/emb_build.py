@@ -312,7 +312,9 @@ def main():
     # Setup output directory
     if not args.run_name:
         args.run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+    else:
+        args.run_name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + args.run_name
+
     outdir = os.path.join(args.outdir, args.run_name)
     os.makedirs(outdir, exist_ok=True)
     logger.info(f"Output directory: {outdir}")
