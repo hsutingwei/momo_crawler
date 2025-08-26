@@ -34,15 +34,37 @@ def load_sentence_transformer(model_name: str, device: str = 'auto'):
         from sentence_transformers import SentenceTransformer
         import torch
         
+        # Check CUDA availability
+        cuda_available = torch.cuda.is_available()
+        
         if device == 'auto':
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = 'cuda' if cuda_available else 'cpu'
+        elif device == 'cuda' and not cuda_available:
+            logger.warning("CUDA requested but not available. Falling back to CPU.")
+            device = 'cpu'
         
         logger.info(f"Loading sentence transformer: {model_name}")
+        logger.info(f"CUDA available: {cuda_available}")
+        logger.info(f"Using device: {device}")
+        
         model = SentenceTransformer(model_name, device=device)
         logger.info(f"Model loaded on device: {device}")
         return model, device
     except ImportError:
         raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        # Fallback to CPU if there's any device-related error
+        if device != 'cpu':
+            logger.info("Falling back to CPU...")
+            try:
+                model = SentenceTransformer(model_name, device='cpu')
+                logger.info("Model loaded on CPU")
+                return model, 'cpu'
+            except Exception as e2:
+                raise Exception(f"Failed to load model on both {device} and CPU: {e2}")
+        else:
+            raise
 
 
 def load_word_embeddings(emb_type: str, emb_path: str):
