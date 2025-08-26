@@ -269,52 +269,42 @@ def create_visualization_data(X_dense_df: pd.DataFrame, X_tfidf, y: pd.Series,
     umap_reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=min(15, len(X_scaled)//4))
     X_umap = umap_reducer.fit_transform(X_scaled)
     
-    # 創建可視化
     if save_plots:
         os.makedirs(outdir, exist_ok=True)
-        
-        # 設置圖表樣式
-        plt.style.use('default')
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        
-        # PCA 圖
-        scatter0 = axes[0].scatter(X_pca[y == 0, 0], X_pca[y == 0, 1], alpha=0.6, label='y=0', s=20)
-        scatter1 = axes[0].scatter(X_pca[y == 1, 0], X_pca[y == 1, 1], alpha=0.6, label='y=1', s=20)
-        axes[0].set_title(f'PCA (解釋變異: {pca.explained_variance_ratio_[0]:.1%}, {pca.explained_variance_ratio_[1]:.1%})')
-        axes[0].set_xlabel('PC1')
-        axes[0].set_ylabel('PC2')
-        axes[0].legend()
-        axes[0].grid(True, alpha=0.3)
-        
-        # t-SNE 圖
-        axes[1].scatter(X_tsne[y == 0, 0], X_tsne[y == 0, 1], alpha=0.6, label='y=0', s=20)
-        axes[1].scatter(X_tsne[y == 1, 0], X_tsne[y == 1, 1], alpha=0.6, label='y=1', s=20)
-        axes[1].set_title('t-SNE')
-        axes[1].set_xlabel('t-SNE 1')
-        axes[1].set_ylabel('t-SNE 2')
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
-        
-        # UMAP 圖
-        axes[2].scatter(X_umap[y == 0, 0], X_umap[y == 0, 1], alpha=0.6, label='y=0', s=20)
-        axes[2].scatter(X_umap[y == 1, 0], X_umap[y == 1, 1], alpha=0.6, label='y=1', s=20)
-        axes[2].set_title('UMAP')
-        axes[2].set_xlabel('UMAP 1')
-        axes[2].set_ylabel('UMAP 2')
-        axes[2].legend()
-        axes[2].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        # 保存圖表
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plot_filename = f"feature_visualization_{timestamp}.{plot_format}"
-        plot_path = os.path.join(outdir, plot_filename)
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        results["plots_saved"].append(plot_path)
-        print(f"可視化圖表已保存: {plot_path}")
+
+        def save_scatter(X2d, title, xlab, ylab, filename):
+            plt.style.use('default')
+            fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+            ax.scatter(X2d[y == 0, 0], X2d[y == 0, 1], alpha=0.6, label='y=0', s=20)
+            ax.scatter(X2d[y == 1, 0], X2d[y == 1, 1], alpha=0.6, label='y=1', s=20)
+            ax.set_title(title)
+            ax.set_xlabel(xlab)
+            ax.set_ylabel(ylab)
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            path = os.path.join(outdir, filename)
+            plt.savefig(path, dpi=300, bbox_inches='tight')
+            plt.close()
+            results["plots_saved"].append(path)
+            return path
+
+        # PCA
+        pca_title = f'PCA (解釋變異: {pca.explained_variance_ratio_[0]:.1%}, {pca.explained_variance_ratio_[1]:.1%})'
+        pca_name  = f"feature_visualization_{timestamp}_pca.{plot_format}"
+        pca_path  = save_scatter(X_pca, pca_title, 'PC1', 'PC2', pca_name)
+        print(f"PCA 圖已保存: {pca_path}")
+
+        # t-SNE
+        tsne_name = f"feature_visualization_{timestamp}_tsne.{plot_format}"
+        tsne_path = save_scatter(X_tsne, 't-SNE', 't-SNE 1', 't-SNE 2', tsne_name)
+        print(f"t-SNE 圖已保存: {tsne_path}")
+
+        # UMAP
+        umap_name = f"feature_visualization_{timestamp}_umap.{plot_format}"
+        umap_path = save_scatter(X_umap, 'UMAP', 'UMAP 1', 'UMAP 2', umap_name)
+        print(f"UMAP 圖已保存: {umap_path}")
     
     # 計算分離度指標
     def calculate_separation_score(X_2d, y):
