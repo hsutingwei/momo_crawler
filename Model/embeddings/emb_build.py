@@ -92,7 +92,7 @@ def load_word_embeddings(emb_type: str, emb_path: str):
 
 
 def encode_sentences(model, texts: List[str], batch_size: int = 32, 
-                    pooling: str = 'mean', fp16: bool = False) -> np.ndarray:
+                    fp16: bool = False) -> np.ndarray:
     """Encode sentences using sentence transformer."""
     logger.info(f"Encoding {len(texts)} sentences with batch_size={batch_size}")
     
@@ -320,8 +320,6 @@ def main():
     parser.add_argument('--embed-model', type=str, 
                        default='paraphrase-multilingual-MiniLM-L12-v2',
                        help='Sentence transformer model name')
-    parser.add_argument('--pooling', choices=['mean', 'cls', 'max'], default='mean',
-                       help='Pooling method for sentence embeddings')
     
     # Word embedding parameters (Pipeline B)
     parser.add_argument('--word-emb', choices=['fasttext', 'word2vec'], 
@@ -400,7 +398,7 @@ def main():
             
             # Encode sentences
             embeddings = encode_sentences(
-                model, texts, args.batch_size, args.pooling, args.fp16
+                model, texts, args.batch_size, args.fp16
             )
             
             oov_ratio = None
@@ -523,11 +521,11 @@ def main():
             pipeline_version=args.pipeline_version,
             text_source=args.text_source if use_sentence_emb else None,
             embed_model=args.embed_model if use_sentence_emb else None,
-            pooling=args.pooling if use_sentence_emb else None,
             word_emb=args.word_emb if not use_sentence_emb else None,
             idf_source=args.idf_source if not use_sentence_emb else None,
             sif_alpha=args.sif_alpha if not use_sentence_emb else None,
             sif_remove_pc=args.sif_remove_pc if not use_sentence_emb else 0,
+            product_aggregation=args.product_aggregation if args.mode == 'product_level' else None,
             n_samples=n_samples,
             dim=dim,
             batch_size=args.batch_size,
