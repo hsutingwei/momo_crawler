@@ -4,7 +4,7 @@ Embedding feature generation pipeline.
 Supports both sentence-level and word-level embeddings.
 """
 
-import os
+import os, uuid
 import sys
 import argparse
 import logging
@@ -341,7 +341,6 @@ def main():
     # Output parameters
     parser.add_argument('--outdir', type=str, default='outputs',
                        help='Output directory')
-    parser.add_argument('--run-name', type=str, help='Custom run name (default: timestamp)')
     parser.add_argument('--with-y', action='store_true', help='Also generate y labels')
     
     args = parser.parse_args()
@@ -361,12 +360,9 @@ def main():
         logger.info("Using word embedding pipeline")
     
     # Setup output directory
-    if not args.run_name:
-        args.run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    else:
-        args.run_name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + args.run_name
+    run_id = str(uuid.uuid4())
 
-    outdir = os.path.join(args.outdir, args.run_name)
+    outdir = os.path.join(args.outdir, run_id)
     os.makedirs(outdir, exist_ok=True)
     logger.info(f"Output directory: {outdir}")
     
@@ -512,7 +508,7 @@ def main():
             notes += f"; product aggregation: {args.product_aggregation}"
         
         manifest = create_manifest(
-            run_name=args.run_name,
+            run_name=run_id,
             start_time=start_time,
             end_time=end_time,
             device=device if use_sentence_emb else 'cpu',
