@@ -623,7 +623,8 @@ def load_product_level_training_set(
 
         # 7) Dense features
         dense_cols = [
-            "price", "has_image_urls", "image_urls_count", "has_video_url",
+            "price", 
+            "has_image_urls", "image_urls_count", "has_video_url",
             "has_reply_content", "score_mean", "like_count_sum",
             "had_any_change_pre", "num_increases_pre", "comment_count_pre"
         ]
