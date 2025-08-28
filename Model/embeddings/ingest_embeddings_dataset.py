@@ -19,6 +19,13 @@ python ingest_embeddings_dataset.py --manifest Model/embeddings/train_output/dat
 - 不存在則用環境變數 PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE 連 psycopg2
 """
 
+from pathlib import Path
+import sys
+import os
+# 專案根目錄 (…/momo_crawler-main)
+REPO_ROOT = Path(__file__).resolve().parent.parent  # .../Model -> 上一層 = 專案根目錄
+sys.path.insert(0, str(REPO_ROOT))
+
 import argparse
 import json
 import os
@@ -26,30 +33,8 @@ import sys
 from datetime import datetime, date
 from typing import Optional, Tuple
 
-# --- DB 連線：優先使用專案內部 config.database，否則改用 psycopg2 ---
-def get_db_conn():
-    try:
-        # 你專案裡已經有的 DB 連線工具（若有）
-        from config.database import get_pg_conn as _get
-        return _get()
-    except Exception:
-        try:
-            from config.database import connect_postgres as _get2
-            return _get2()
-        except Exception:
-            pass
-
-    # 退回用環境變數 + psycopg2
-    import psycopg2
-    params = dict(
-        host=os.getenv("PGHOST", "localhost"),
-        port=int(os.getenv("PGPORT", "5432")),
-        user=os.getenv("PGUSER", "postgres"),
-        password=os.getenv("PGPASSWORD", ""),
-        dbname=os.getenv("PGDATABASE", "postgres"),
-    )
-    return psycopg2.connect(**params)
-
+# 沿用 csv_to_db.py 的連線方式
+from config.database import DatabaseConfig  # type: ignore
 
 def parse_args():
     ap = argparse.ArgumentParser(
@@ -112,7 +97,7 @@ def safe_load_manifest(manifest_path: str) -> dict:
         return json.load(f)
 
 
-def ensure_model(conn, provider: str, model_name: str, dim: int,
+def ensure_model(cur, provider: str, model_name: str, dim: int,
                  tokenization: Optional[str], version: Optional[str], notes: Optional[str]) -> int:
     """
     UPSERT 到 emb_models，回傳 model_id
@@ -126,14 +111,13 @@ def ensure_model(conn, provider: str, model_name: str, dim: int,
                   notes = EXCLUDED.notes
     RETURNING id;
     """
-    with conn.cursor() as cur:
-        cur.execute(sql, (provider, model_name, dim, tokenization, version, notes))
-        model_id = cur.fetchone()[0]
-    conn.commit()
+    cur.execute(sql, (provider, model_name, dim, tokenization, version, notes))
+    model_id = cur.fetchone()[0]
+    cur.connection.commit()
     return model_id
 
 
-def upsert_dataset(conn, model_id: int, payload: dict) -> int:
+def upsert_dataset(cur, model_id: int, payload: dict) -> int:
     """
     UPSERT 到 emb_datasets，回傳 emb_dataset.id
     唯一鍵：(model_id, dataset_prefix)
@@ -165,10 +149,9 @@ def upsert_dataset(conn, model_id: int, payload: dict) -> int:
       n_rows = EXCLUDED.n_rows
     RETURNING id;
     """
-    with conn.cursor() as cur:
-        cur.execute(sql, payload | {"model_id": model_id})
-        dataset_id = cur.fetchone()[0]
-    conn.commit()
+    cur.execute(sql, payload | {"model_id": model_id})
+    dataset_id = cur.fetchone()[0]
+    cur.connection.commit()
     return dataset_id
 
 
@@ -259,11 +242,14 @@ def main():
         except Exception:
             n_rows = None
 
-    # --- 寫入資料庫 ---
-    conn = get_db_conn()
+    db = DatabaseConfig()
+    conn = db.get_connection()
+    conn.autocommit = False
+    cur = conn.cursor()
+
     try:
         model_id = ensure_model(
-            conn,
+            cur,
             provider=provider,
             model_name=model_name,
             dim=int(dim),
@@ -290,7 +276,7 @@ def main():
             "n_rows": n_rows,
         }
 
-        dataset_id = upsert_dataset(conn, model_id=model_id, payload=payload)
+        dataset_id = upsert_dataset(cur, model_id=model_id, payload=payload)
 
         print("\n=== EMBEDDING DATASET INGESTED ===")
         print(f"  model_id      : {model_id}")
