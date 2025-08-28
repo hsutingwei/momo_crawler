@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8-sig -*-
 """
 ingest_embeddings_dataset.py
 
@@ -93,7 +93,7 @@ def locate_files(base_dir: str, dataset_prefix: str) -> dict:
 
 
 def safe_load_manifest(manifest_path: str) -> dict:
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with open(manifest_path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -238,7 +238,7 @@ def main():
     if not n_rows and meta_path and os.path.exists(meta_path):
         try:
             import pandas as pd
-            n_rows = int(sum(1 for _ in open(meta_path, "r", encoding="utf-8")) - 1)  # 粗略數行數（扣 header）
+            n_rows = int(sum(1 for _ in open(meta_path, "r", encoding="utf-8-sig")) - 1)  # 粗略數行數（扣 header）
         except Exception:
             n_rows = None
 
