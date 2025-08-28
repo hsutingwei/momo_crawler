@@ -13,17 +13,13 @@ python ingest_embeddings_dataset.py \
 
 或直接給 manifest 路徑：
 python ingest_embeddings_dataset.py --manifest Model/embeddings/train_output/datasets/dataset_product_level_20250625_global_top100_20250827-222350_manifest.json
-
-資料庫連線：
-- 優先嘗試 import config.database.get_pg_conn() / connect_postgres()
-- 不存在則用環境變數 PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE 連 psycopg2
 """
 
 from pathlib import Path
 import sys
 import os
 # 專案根目錄 (…/momo_crawler-main)
-REPO_ROOT = Path(__file__).resolve().parent.parent  # .../Model -> 上一層 = 專案根目錄
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # .../Model -> 上一層 = 專案根目錄
 sys.path.insert(0, str(REPO_ROOT))
 
 import argparse
@@ -47,19 +43,6 @@ def parse_args():
                     help="Base dir containing dataset files (same as emb_build --outdir)")
     ap.add_argument("--dataset-prefix", type=str, default=None,
                     help="Dataset prefix (filename stem without suffix); e.g. dataset_product_level_20250625_...")
-
-    # 若 manifest 裡沒有或要覆蓋，可補充以下欄位
-    ap.add_argument("--provider", type=str, default=None)
-    ap.add_argument("--model-name", type=str, default=None)
-    ap.add_argument("--dim", type=int, default=None)
-    ap.add_argument("--tokenization", type=str, default=None)  # none | ckip | bpe …
-    ap.add_argument("--version", type=str, default=None)       # 你的 pipeline tag
-    ap.add_argument("--notes", type=str, default=None)
-    ap.add_argument("--mode", type=str, default=None)          # product_level | comment_level
-    ap.add_argument("--text-source", type=str, default=None)   # raw | norm
-    ap.add_argument("--pooling", type=str, default=None)       # mean | max | sif …
-    ap.add_argument("--date-cutoff", type=str, default=None)   # YYYY-MM-DD
-    ap.add_argument("--run-name", type=str, default=None)      # optional
 
     return ap.parse_args()
 
@@ -167,7 +150,7 @@ def main():
         base_dir = os.path.dirname(manifest_path)
         # 由檔名推 dataset_prefix（去掉尾端 _manifest.json）
         fname = os.path.basename(manifest_path)
-        if not fname.endswith("_manifest.json"):
+        if not fname.endswith("manifest.json"):
             print("[ERROR] manifest 檔名必須以 _manifest.json 結尾")
             sys.exit(1)
         dataset_prefix = fname[:-len("_manifest.json")]
@@ -188,26 +171,25 @@ def main():
     manifest = safe_load_manifest(manifest_path)
 
     # --- 從 manifest / 參數彙整模型資訊 ---
-    provider = args.provider or manifest.get("provider") or manifest.get("embed_provider") \
-               or manifest.get("embedding", {}).get("provider")
-    model_name = args.model_name or manifest.get("model_name") or manifest.get("embed_model") \
+    provider = manifest.get("embed_model").split("/")[0] if manifest.get("embed_model") else None
+    model_name = manifest.get("model_name") or manifest.get("embed_model") \
                  or manifest.get("embedding", {}).get("model_name")
-    dim = args.dim or manifest.get("dim") or manifest.get("embed_dim") \
+    dim = manifest.get("dim") or manifest.get("embed_dim") \
           or manifest.get("embedding", {}).get("dim")
-    tokenization = args.tokenization or manifest.get("tokenization")
-    version = args.version or manifest.get("pipeline_version") or manifest.get("version")
-    notes = args.notes or manifest.get("notes")
+    tokenization = manifest.get("tokenization")
+    version = manifest.get("pipeline_version") or manifest.get("version")
+    notes = manifest.get("notes") or None
 
     if not provider or not model_name or not dim:
         print("[ERROR] 缺少模型資訊（provider / model_name / dim）。可用 --provider/--model-name/--dim 覆蓋。")
         sys.exit(1)
 
     # --- 一般資料集欄位 ---
-    mode = args.mode or manifest.get("mode")
-    text_source = args.text_source or manifest.get("text_source") or manifest.get("data", {}).get("text_source")
-    pooling = args.pooling or manifest.get("pooling") or manifest.get("embedding", {}).get("pooling")
-    date_cutoff = _str_to_date(args.date_cutoff or manifest.get("date_cutoff") or manifest.get("data", {}).get("date_cutoff"))
-    run_name = args.run_name or manifest.get("run_name")
+    mode = manifest.get("mode")
+    text_source = manifest.get("text_source") or manifest.get("data", {}).get("text_source")
+    pooling = manifest.get("pooling") or manifest.get("embedding", {}).get("pooling")
+    date_cutoff = _str_to_date(manifest.get("date_cutoff") or manifest.get("data", {}).get("date_cutoff"))
+    run_name = manifest.get("run_name")
 
     # 檔案路徑：x_path 以 Xembed 為主；若同時存在 .npy / .npz，取 .npy（或你想反過來）
     x_path = None
