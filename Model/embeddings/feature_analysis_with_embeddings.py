@@ -129,7 +129,7 @@ def load_embeddings(embed_path: str, mode: str, dtype: str = "float32",
         else:
             y_labels = y_df.iloc[:, 0].to_numpy()
         
-        with open(picked["manifest"], "r", encoding="utf-8") as f:
+        with open(picked["manifest"], "r", encoding="utf-8-sig") as f:
             manifest_info = json.load(f)
         
         print(f"載入 embedding（新格式）: {X_embed.shape}，{len(y_labels)} 標籤")
@@ -160,7 +160,7 @@ def load_embeddings(embed_path: str, mode: str, dtype: str = "float32",
     
     y_labels = np.load(str(y_path))
     
-    with open(manifest, "r", encoding="utf-8") as f:
+    with open(manifest, "r", encoding="utf-8-sig") as f:
         manifest_info = json.load(f)
     
     print(f"載入 embedding（舊格式）: {X_embed.shape}，{len(y_labels)} 標籤")
