@@ -279,8 +279,12 @@ def analyze_dense_feature_distributions(X_dense_df: pd.DataFrame, y: pd.Series) 
     
     print(f"\n總結:")
     print(f"  總特徵數: {total_features}")
-    print(f"  顯著差異特徵: {significant_features} ({significant_features/total_features:.1%})")
-    print(f"  高分離特徵: {high_separation_features} ({high_separation_features/total_features:.1%})")
+    if total_features > 0:
+        print(f"  顯著差異特徵: {significant_features} ({significant_features/total_features:.1%})")
+        print(f"  高分離特徵: {high_separation_features} ({high_separation_features/total_features:.1%})")
+    else:
+        print(f"  顯著差異特徵: {significant_features} (無 dense 特徵)")
+        print(f"  高分離特徵: {high_separation_features} (無 dense 特徵)")
     
     return results
 
@@ -351,8 +355,8 @@ def analyze_embedding_feature_distributions(X_embed: np.ndarray, y: pd.Series) -
                 "std": float(y0_std),
                 "min": float(y0_values.min()),
                 "max": float(y0_values.max()),
-                "q25": float(y0_values.quantile(0.25)),
-                "q75": float(y0_values.quantile(0.75))
+                "q25": float(np.percentile(y0_values, 25)),
+                "q75": float(np.percentile(y0_values, 75))
             },
             "y1_stats": {
                 "count": len(y1_values),
@@ -360,8 +364,8 @@ def analyze_embedding_feature_distributions(X_embed: np.ndarray, y: pd.Series) -
                 "std": float(y1_std),
                 "min": float(y1_values.min()),
                 "max": float(y1_values.max()),
-                "q25": float(y1_values.quantile(0.25)),
-                "q75": float(y1_values.quantile(0.75))
+                "q25": float(np.percentile(y1_values, 25)),
+                "q75": float(np.percentile(y1_values, 75))
             },
             "separation_metrics": {
                 "cohens_d": float(cohens_d),
@@ -676,28 +680,40 @@ def load_data_dynamically(args) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, 
     
     print(f"載入數據：mode={args.mode}, date_cutoff={args.date_cutoff}, top_n={top_n}")
     
-    # 根據 mode 選擇載入方式
-    if args.mode == "product_level":
-        X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
-            date_cutoff=args.date_cutoff,
-            top_n=top_n,
-            pipeline_version=args.pipeline_version,
-            vocab_mode=args.vocab_mode,
-            single_keyword=args.keyword,
-            exclude_products=excluded
-        )
-    else:
-        X_dense_df, X_tfidf, y, meta, vocab = load_training_set(
-            top_n=top_n,
-            pipeline_version=args.pipeline_version,
-            date_cutoff=args.date_cutoff,
-            vocab_scope="global",
-        )
-    
-    print(f"數據載入完成：{len(y)} 樣本，{X_dense_df.shape[1]} 個 dense 特徵，{X_tfidf.shape[1]} 個 TF-IDF 特徵")
-    print(f"類別分佈：y=0: {(y==0).sum()} ({y.mean():.3f}), y=1: {(y==1).sum()} ({1-y.mean():.3f})")
-    
-    return X_dense_df, X_tfidf, y, meta, vocab
+    try:
+        # 根據 mode 選擇載入方式
+        if args.mode == "product_level":
+            X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
+                date_cutoff=args.date_cutoff,
+                top_n=top_n,
+                pipeline_version=args.pipeline_version,
+                vocab_mode=args.vocab_mode,
+                single_keyword=args.keyword,
+                exclude_products=excluded
+            )
+        else:
+            X_dense_df, X_tfidf, y, meta, vocab = load_training_set(
+                top_n=top_n,
+                pipeline_version=args.pipeline_version,
+                date_cutoff=args.date_cutoff,
+                vocab_scope="global",
+            )
+        
+        print(f"數據載入完成：{len(y)} 樣本，{X_dense_df.shape[1]} 個 dense 特徵，{X_tfidf.shape[1]} 個 TF-IDF 特徵")
+        print(f"類別分佈：y=0: {(y==0).sum()} ({y.mean():.3f}), y=1: {(y==1).sum()} ({1-y.mean():.3f})")
+        
+        return X_dense_df, X_tfidf, y, meta, vocab
+        
+    except NameError:
+        print("警告：無法載入 data_loader，使用空的數據結構")
+        # 創建空的數據結構
+        X_dense_df = pd.DataFrame()
+        X_tfidf = None
+        y = pd.Series()
+        meta = pd.DataFrame()
+        vocab = []
+        
+        return X_dense_df, X_tfidf, y, meta, vocab
 
 def align_embeddings_to_dataset(X_embed: np.ndarray, embed_keys: pd.Series, 
                                dataset_meta: pd.DataFrame, mode: str) -> tuple[np.ndarray, list]:
@@ -751,21 +767,30 @@ def main():
     # 2. 動態載入數據
     X_dense_df, X_tfidf, y, meta, vocab = load_data_dynamically(args)
     
-    # 3. 對齊 embedding 與數據集
-    print(f"\n對齊 embedding 與數據集...")
-    X_embed_aligned, aligned_indices = align_embeddings_to_dataset(
-        X_embed, embed_keys, meta, args.embed_mode
-    )
-    
-    # 4. 過濾數據集以匹配 embedding
-    X_dense_df = X_dense_df.iloc[aligned_indices].reset_index(drop=True)
-    if X_tfidf is not None:
-        X_tfidf = X_tfidf[aligned_indices]
-    y = y.iloc[aligned_indices].reset_index(drop=True)
-    meta = meta.iloc[aligned_indices].reset_index(drop=True)
-    
-    # 使用 embedding 的 y 標籤
-    y = pd.Series(y_embed[aligned_indices])
+    # 3. 檢查是否有 dense 數據
+    if len(X_dense_df) == 0:
+        print("沒有 dense 數據，僅使用 embedding 進行分析")
+        # 直接使用 embedding 數據
+        X_embed_aligned = X_embed
+        y = pd.Series(y_embed)
+        # 創建空的 dense 數據框
+        X_dense_df = pd.DataFrame(index=range(len(y)))
+    else:
+        # 對齊 embedding 與數據集
+        print(f"\n對齊 embedding 與數據集...")
+        X_embed_aligned, aligned_indices = align_embeddings_to_dataset(
+            X_embed, embed_keys, meta, args.embed_mode
+        )
+        
+        # 過濾數據集以匹配 embedding
+        X_dense_df = X_dense_df.iloc[aligned_indices].reset_index(drop=True)
+        if X_tfidf is not None:
+            X_tfidf = X_tfidf[aligned_indices]
+        y = y.iloc[aligned_indices].reset_index(drop=True)
+        meta = meta.iloc[aligned_indices].reset_index(drop=True)
+        
+        # 使用 embedding 的 y 標籤
+        y = pd.Series(y_embed[aligned_indices])
     
     # 5. 可選的 embedding 標準化
     if args.embed_scale == "standardize":

@@ -32,3 +32,4 @@ preprocess_v2
 /Model/analysis_outputs
 /Model/embeddings/outputs
 /Model/embeddings/train_output
+/Model/embeddings/analysis_outputs
