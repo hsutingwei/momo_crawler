@@ -18,14 +18,13 @@ python ingest_embeddings_dataset.py --manifest Model/embeddings/train_output/dat
 from pathlib import Path
 import sys
 import os
+import uuid
 # 專案根目錄 (…/momo_crawler-main)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # .../Model -> 上一層 = 專案根目錄
 sys.path.insert(0, str(REPO_ROOT))
 
 import argparse
 import json
-import os
-import sys
 from datetime import datetime, date
 from typing import Optional, Tuple
 
@@ -193,7 +192,7 @@ def main():
               or manifest.get("embedding", {}).get("dim")
     
     tokenization = manifest.get("tokenization")
-    version = manifest.get("pipeline_version") or manifest.get("version")
+    version = str(uuid.uuid4())
     notes = manifest.get("notes") or None
 
     if not provider or not model_name or not dim:
