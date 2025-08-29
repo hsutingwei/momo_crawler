@@ -291,7 +291,8 @@ def save_dataset_artifacts(outdir: str,
                            meta: pd.DataFrame,
                            vocab: list,
                            X_embed: np.ndarray = None,
-                           embed_info: dict = None) -> dict:
+                           embed_info: dict = None,
+                           stamp: str = None) -> dict:
     """
     把目前載入好的資料集落地成暫存檔，回傳各檔案路徑（之後可寫進 DB）。
     """
@@ -299,7 +300,6 @@ def save_dataset_artifacts(outdir: str,
     ds_dir = os.path.join(outdir, "datasets")
     os.makedirs(ds_dir, exist_ok=True)
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     base = f"dataset_{mode}_{date_cutoff.replace('-','')}_{vocab_mode}_top{top_n_built}_{stamp}"
 
     p_Xdense = os.path.join(ds_dir, f"{base}_Xdense.csv")
@@ -369,7 +369,7 @@ def save_dataset_artifacts(outdir: str,
     return ds_manifest
 
 def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str,
-                    X_dense_df, X_tfidf, y, meta, vocab, X_embed, embed_info, outdir: str):
+                    X_dense_df, X_tfidf, y, meta, vocab, X_embed, embed_info, outdir: str, stamp: str):
     # 組特徵
     X_dense = std_scaler_to_sparse(X_dense_df)
     
@@ -503,7 +503,6 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
 
     # 寫檔
     os.makedirs(outdir, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     base = f"run_{args.date_cutoff.replace('-','')}_{args.vocab_mode}_top{top_n}_{alg_name}_{fs_method}_{stamp}"
     p_folds   = os.path.join(outdir, f"{base}_fold_metrics.csv")
     p_summary = os.path.join(outdir, f"{base}_summary.csv")
@@ -609,6 +608,7 @@ def main():
     # 載入 embedding（如果需要的話）
     X_embed = None
     embed_info = None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
     if args.embed_mode in ["append", "only"]:
         print(f"載入 embedding 從: {args.embed_path}")
@@ -669,7 +669,8 @@ def main():
         meta=meta,
         vocab=vocab,
         X_embed=X_embed,
-        embed_info=embed_info
+        embed_info=embed_info,
+        stamp=stamp
     )
 
     # === 類別分佈 & 建議權重 ===
@@ -685,12 +686,12 @@ def main():
     # 若要對每個 topN 都各跑一次：可在外層重建 vocab+X_tfidf；先給一個實用版本：Dense 同一份，TF 用同一 vocab
     os.makedirs(args.outdir, exist_ok=True)
     all_folds, all_summaries, manifests = [], [], []
-
+    
     for topn in topn_list:
         # 簡化：當 topn != 建立時的 topN，只是記錄 metadata，不重建（需要重建再擴充）
         for alg in alg_list:
             for fs in fs_list:
-                out = run_one_setting(run_id, args, topn, alg, fs, X_dense_df, X_tfidf, y, meta, vocab, X_embed, embed_info, args.outdir)
+                out = run_one_setting(run_id, args, topn, alg, fs, X_dense_df, X_tfidf, y, meta, vocab, X_embed, embed_info, args.outdir, stamp)
                 if out[0] is None:
                     continue
                 df_folds, df_summary, p_manifest = out
@@ -730,7 +731,7 @@ def main():
             },
             "suggested_weights": {
                 "xgboost": {"scale_pos_weight": suggested_spw if args.oversample == "xgb_scale_pos_weight" else None},
-                # 如果你之後要在 SVM/LightGBM 啟用 class_weight 也能在這裡寫下建議值
+                # 如果之後要在 SVM/LightGBM 啟用 class_weight 也能在這裡寫下建議值
                 # "svm": {"class_weight": "balanced"},
                 # "lightgbm": {"is_unbalance": True}
             }
