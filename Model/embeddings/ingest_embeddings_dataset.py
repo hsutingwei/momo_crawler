@@ -5,10 +5,11 @@ ingest_embeddings_dataset.py
 將 train_with_embeddings.py 產出的 dataset（manifest + 檔案們）寫入資料庫：
 - upsert 到 emb_models（provider, model_name, version 唯一）
 - upsert 到 emb_datasets（model_id, dataset_prefix 唯一）
+- 可選：匯入向量到 emb_comment / emb_product_batch / emb_tokens
 
 用法（示例）：
-  python Model/ingest_embeddings_dataset.py \
-    --manifest Model/embeddings/train_output/datasets/dataset_product_level_20250625_..._manifest.json \
+  python Model/embeddings/ingest_embeddings_dataset.py \
+    --manifest Model/embeddings/train_output/run_20250625_global_top100_xgboost_no_fs_20250828-153309_manifest.json \
     --ingest-vectors --target auto --batch-size 1000
 
 也可透過 --base-dir + --dataset-prefix 指定一批資料，或 --dataset-id（先插入 emb_datasets 後再補向量）。
@@ -39,11 +40,11 @@ def parse_args():
     ap.add_argument("--dataset-prefix", type=str, help="Dataset prefix (without suffix)")
     ap.add_argument("--dataset-id", type=int, help="Use an existing emb_datasets.id to fetch paths")
 
-    # B. 基本欄位（原本就有的：寫 emb_models / emb_datasets 時用）
+    # B. 基本欄位（可覆蓋 manifest 中的值）
     ap.add_argument("--provider", type=str, help="Provider: sentence-transformers|openai|jina|word2vec|fasttext")
     ap.add_argument("--model-name", type=str, help="Model name, e.g., jinaai/jina-embeddings-v2-base-zh")
     ap.add_argument("--dim", type=int, help="Embedding dimension")
-    ap.add_argument("--tokenization", type=str, default="none", help="none|ckip|bpe|... pipeline tokenization label")
+    ap.add_argument("--tokenization", type=str, help="none|ckip|bpe|... pipeline tokenization label")
     ap.add_argument("--notes", type=str, help="free-form notes")
 
     # C. 控制是否也匯入向量
@@ -97,6 +98,129 @@ def l2_norm(vec: np.ndarray) -> float:
     v = float(np.linalg.norm(vec)) if vec is not None else 0.0
     return 0.0 if math.isnan(v) else v
 
+def extract_model_info_from_manifest(manifest: dict) -> dict:
+    """從 manifest 中提取模型資訊"""
+    embed_info = manifest.get("embeddings", {})
+    
+    # 模型資訊
+    embed_model = embed_info.get("embed_model") or manifest.get("embed_model")
+    if embed_model:
+        provider = embed_model.split("/")[0]
+        model_name = embed_model
+    else:
+        provider = manifest.get("provider") or "sentence-transformers"
+        model_name = manifest.get("model_name")
+    
+    dim = embed_info.get("dim") or manifest.get("dim")
+    tokenization = manifest.get("tokenization") or "none"
+    version = manifest.get("pipeline_version") or manifest.get("version")
+    notes = manifest.get("notes")
+    
+    return {
+        "provider": provider,
+        "model_name": model_name,
+        "dim": dim,
+        "tokenization": tokenization,
+        "version": version,
+        "notes": notes
+    }
+
+def extract_dataset_info_from_manifest(manifest: dict, dataset_prefix: str, base_dir: str) -> dict:
+    """從 manifest 中提取資料集資訊"""
+    embed_info = manifest.get("embeddings", {})
+    
+    return {
+        "run_name": manifest.get("run_id") or manifest.get("run_name"),
+        "mode": manifest.get("mode"),
+        "text_source": embed_info.get("text_source") or manifest.get("text_source"),
+        "pooling": embed_info.get("product_aggregation") or manifest.get("pooling"),
+        "date_cutoff": manifest.get("date_cutoff"),
+        "dataset_prefix": dataset_prefix,
+        "base_dir": base_dir,
+        "dim": embed_info.get("dim") or manifest.get("dim"),
+        "n_rows": manifest.get("shapes", {}).get("y") or manifest.get("n_rows")
+    }
+
+def resolve_file_paths(manifest: dict, base_dir: str, dataset_prefix: str) -> dict:
+    """解析檔案路徑，支援 train_with_embeddings.py 的結構"""
+    files = {}
+    
+    # 檢查是否有 embedding 資訊
+    embed_info = manifest.get("embeddings", {})
+    if embed_info and "path" in embed_info:
+        # train_with_embeddings.py 格式：embedding 檔案在 embeddings.path 目錄下
+        embed_dir = embed_info["path"]
+        
+        # 檢查 embedding 目錄下的檔案
+        embed_manifest_path = os.path.join(embed_dir, "manifest.json")
+        if os.path.exists(embed_manifest_path):
+            try:
+                with open(embed_manifest_path, "r", encoding="utf-8-sig") as f:
+                    embed_manifest = json.load(f)
+                embed_files = embed_manifest.get("files", {})
+                
+                # 從 embedding manifest 讀取檔案路徑
+                if "X_embed" in embed_files:
+                    files["X_npz"] = os.path.join(embed_dir, embed_files["X_embed"])
+                if "meta" in embed_files:
+                    files["meta"] = os.path.join(embed_dir, embed_files["meta"])
+            except Exception as e:
+                print(f"[WARNING] 無法讀取 embedding manifest: {e}")
+        
+        # 直接檢查 embedding 目錄下的檔案
+        if "X_npz" not in files:
+            x_path_candidates = [
+                os.path.join(embed_dir, "X_embed.npz"),
+                os.path.join(embed_dir, "Xembed.npy"),
+                os.path.join(embed_dir, "X_embed.npy")
+            ]
+            for candidate in x_path_candidates:
+                if os.path.exists(candidate):
+                    files["X_npz"] = candidate
+                    break
+        
+        if "meta" not in files:
+            meta_candidate = os.path.join(embed_dir, "meta.csv")
+            if os.path.exists(meta_candidate):
+                files["meta"] = meta_candidate
+        
+        # y 檔案可能在 embedding 目錄或主目錄
+        y_candidates = [
+            os.path.join(embed_dir, "y.csv"),
+            os.path.join(embed_dir, "y.npy")
+        ]
+        for candidate in y_candidates:
+            if os.path.exists(candidate):
+                files["y_csv"] = candidate
+                break
+    
+    # 如果還沒找到，從主 manifest.files 讀取
+    manifest_files = manifest.get("files", {})
+    if "X_npz" not in files:
+        if "Xembed_npy" in manifest_files:
+            files["X_npz"] = manifest_files["Xembed_npy"]
+        elif "X_embed" in manifest_files:
+            files["X_npz"] = manifest_files["X_embed"]
+    
+    if "y_csv" not in files:
+        if "y_csv" in manifest_files:
+            files["y_csv"] = manifest_files["y_csv"]
+    
+    if "meta" not in files:
+        if "meta_csv" in manifest_files:
+            files["meta"] = manifest_files["meta_csv"]
+    
+    # 回退到預設命名規則
+    default_files = locate_files(base_dir, dataset_prefix)
+    for key, path in default_files.items():
+        if key not in files and os.path.exists(path):
+            files[key] = path
+    
+    # 確保 manifest 路徑存在
+    files["manifest"] = os.path.join(base_dir, f"{dataset_prefix}_manifest.json")
+    
+    return files
+
 # --------------------------
 # DB helpers
 # --------------------------
@@ -111,25 +235,13 @@ def upsert_emb_model(cur, provider, model_name, dim, tokenization, version, note
     return cur.fetchone()[0]
 
 def insert_emb_dataset(cur, model_id: int, meta: dict, files: dict) -> int:
-    # 這裡把你 manifest 的重要欄位填進 emb_datasets
-    run_name = meta.get("run_name")
-    mode = meta.get("mode")
-    text_source = meta.get("text_source")
-    pooling = (meta.get("embeddings") or {}).get("product_aggregation") or meta.get("pooling")
-    date_cutoff = meta.get("date_cutoff")
-    dataset_prefix = meta.get("dataset_prefix")
-    base_dir = meta.get("base_dir")
-
-    # 檔案
+    # 檔案路徑
     manifest_path = files["manifest"]
-    x_path = first_exists(files["X_npz"], files["X_npy"])
-    y_path = first_exists(files["y_csv"], files["y_npy"])
-    meta_path = files["meta"]
+    x_path = first_exists(files.get("X_npz"), files.get("X_npy"))
+    y_path = first_exists(files.get("y_csv"), files.get("y_npy"))
+    meta_path = files.get("meta")
     vocab_path = None
     dense_path = None
-
-    dim = int(meta.get("dim") or (meta.get("embeddings") or {}).get("dim") or 0)
-    n_rows = int(meta.get("n_rows") or 0)
 
     cur.execute("""
         INSERT INTO emb_datasets
@@ -155,9 +267,10 @@ def insert_emb_dataset(cur, model_id: int, meta: dict, files: dict) -> int:
              dim = EXCLUDED.dim,
              n_rows = EXCLUDED.n_rows
         RETURNING id
-    """, (model_id, run_name, mode, text_source, pooling, date_cutoff,
-          dataset_prefix, base_dir, manifest_path, x_path, y_path, meta_path,
-          vocab_path, dense_path, dim, n_rows))
+    """, (model_id, meta.get("run_name"), meta.get("mode"), meta.get("text_source"), 
+          meta.get("pooling"), meta.get("date_cutoff"), meta.get("dataset_prefix"), 
+          meta.get("base_dir"), manifest_path, x_path, y_path, meta_path,
+          vocab_path, dense_path, meta.get("dim"), meta.get("n_rows")))
     return cur.fetchone()[0]
 
 def upsert_emb_product_batch(cur, rows: List[tuple], batch_size: int = 1000):
@@ -170,8 +283,16 @@ def upsert_emb_product_batch(cur, rows: List[tuple], batch_size: int = 1000):
                   num_comments = EXCLUDED.num_comments,
                   weights_meta = EXCLUDED.weights_meta
     """
-    for i in range(0, len(rows), batch_size):
-        pg_extras.execute_values(cur, sql, rows[i:i+batch_size], template=None, page_size=batch_size)
+    # 轉換 numpy 陣列為 PostgreSQL 可接受的格式
+    converted_rows = []
+    for row in rows:
+        product_id, batch_time, model_id, vec, num_comments, weights_meta = row
+        # 將 numpy 陣列轉換為 list，然後轉換為 PostgreSQL 的 VECTOR 格式
+        vec_list = vec.tolist() if hasattr(vec, 'tolist') else list(vec)
+        converted_rows.append((product_id, batch_time, model_id, vec_list, num_comments, weights_meta))
+    
+    for i in range(0, len(converted_rows), batch_size):
+        pg_extras.execute_values(cur, sql, converted_rows[i:i+batch_size], template=None, page_size=batch_size)
 
 def upsert_emb_comment(cur, rows: List[tuple], batch_size: int = 1000):
     sql = """
@@ -182,8 +303,15 @@ def upsert_emb_comment(cur, rows: List[tuple], batch_size: int = 1000):
     DO UPDATE SET emb = EXCLUDED.emb,
                   emb_norm = EXCLUDED.emb_norm
     """
-    for i in range(0, len(rows), batch_size):
-        pg_extras.execute_values(cur, sql, rows[i:i+batch_size], template=None, page_size=batch_size)
+    # 轉換 numpy 陣列為 PostgreSQL 可接受的格式
+    converted_rows = []
+    for row in rows:
+        comment_id, model_id, vec, emb_norm = row
+        vec_list = vec.tolist() if hasattr(vec, 'tolist') else list(vec)
+        converted_rows.append((comment_id, model_id, vec_list, emb_norm))
+    
+    for i in range(0, len(converted_rows), batch_size):
+        pg_extras.execute_values(cur, sql, converted_rows[i:i+batch_size], template=None, page_size=batch_size)
 
 def upsert_emb_tokens(cur, rows: List[tuple], batch_size: int = 2000):
     sql = """
@@ -192,8 +320,15 @@ def upsert_emb_tokens(cur, rows: List[tuple], batch_size: int = 2000):
     ON CONFLICT (model_id, token)
     DO UPDATE SET emb = EXCLUDED.emb
     """
-    for i in range(0, len(rows), batch_size):
-        pg_extras.execute_values(cur, sql, rows[i:i+batch_size], template=None, page_size=batch_size)
+    # 轉換 numpy 陣列為 PostgreSQL 可接受的格式
+    converted_rows = []
+    for row in rows:
+        model_id, token, vec = row
+        vec_list = vec.tolist() if hasattr(vec, 'tolist') else list(vec)
+        converted_rows.append((model_id, token, vec_list))
+    
+    for i in range(0, len(converted_rows), batch_size):
+        pg_extras.execute_values(cur, sql, converted_rows[i:i+batch_size], template=None, page_size=batch_size)
 
 # --------------------------
 # 主流程
@@ -240,28 +375,33 @@ def main():
             manifest = load_manifest(manifest_path)
             base_dir = os.path.dirname(manifest_path)
             dataset_prefix = os.path.basename(manifest_path)[:-len("_manifest.json")]
-            files = locate_files(base_dir, dataset_prefix)
         else:
             if not (args.base_dir and args.dataset_prefix):
                 raise ValueError("Provide --manifest OR (--base-dir AND --dataset-prefix) OR --dataset-id")
             base_dir = args.base_dir
             dataset_prefix = args.dataset_prefix
-            files = locate_files(base_dir, dataset_prefix)
-            manifest = load_manifest(files["manifest"])
+            manifest_path = os.path.join(base_dir, f"{dataset_prefix}_manifest.json")
+            if not os.path.exists(manifest_path):
+                raise FileNotFoundError(f"manifest not found: {manifest_path}")
+            manifest = load_manifest(manifest_path)
 
-        # 先處理 emb_models / emb_datasets（跟你原本相同精神）
+        # 解析檔案路徑
+        files = resolve_file_paths(manifest, base_dir, dataset_prefix)
+
+        # 先處理 emb_models / emb_datasets
         db = DatabaseConfig()
         conn = db.get_connection()
         conn.autocommit = False
         cur = conn.cursor()
 
-        # 若沒手動給 provider/model/dim，就從 manifest 推測
-        provider = args.provider or (manifest.get("provider") or "sentence-transformers")
-        model_name = args.model_name or (manifest.get("embed_model") or manifest.get("model_name"))
-        dim = args.dim or int(manifest.get("dim") or (manifest.get("embeddings") or {}).get("dim") or 0)
-        tokenization = args.tokenization or (manifest.get("tokenization") or "none")
-        version = str(uuid.uuid4())
-        notes = args.notes or manifest.get("notes")
+        # 從 manifest 提取模型資訊，允許參數覆蓋
+        model_info = extract_model_info_from_manifest(manifest)
+        provider = args.provider or model_info["provider"]
+        model_name = args.model_name or model_info["model_name"]
+        dim = args.dim or model_info["dim"]
+        tokenization = args.tokenization or model_info["tokenization"]
+        version = model_info["version"] or str(uuid.uuid4())
+        notes = args.notes or model_info["notes"]
 
         if not model_name or not dim:
             conn.close()
@@ -269,23 +409,20 @@ def main():
 
         model_id = upsert_emb_model(cur, provider, model_name, dim, tokenization, version, notes)
 
-        # 填 emb_datasets：將 manifest 的 metadata 與實際檔案路徑紀錄進來
-        # 先把 manifest 裡缺少的欄位補齊（run_name/mode/text_source/pooling/date_cutoff 等）
-        meta_for_ds = {
-            "run_name": manifest.get("run_name"),
-            "mode": manifest.get("mode"),
-            "text_source": manifest.get("text_source"),
-            "pooling": (manifest.get("embeddings") or {}).get("product_aggregation"),
-            "date_cutoff": manifest.get("date_cutoff"),
-            "dataset_prefix": dataset_prefix,
-            "base_dir": base_dir,
-            "dim": dim,
-            "n_rows": manifest.get("n_rows"),
-        }
-        dataset_id = insert_emb_dataset(cur, model_id, meta_for_ds, files)
+        # 從 manifest 提取資料集資訊
+        dataset_info = extract_dataset_info_from_manifest(manifest, dataset_prefix, base_dir)
+        dataset_id = insert_emb_dataset(cur, model_id, dataset_info, files)
 
         conn.commit()
         conn.close()
+
+        print(f"\n=== METADATA INGESTED ===")
+        print(f"  model_id      : {model_id}")
+        print(f"  dataset_id    : {dataset_id}")
+        print(f"  provider/model: {provider} / {model_name} (dim={dim})")
+        print(f"  mode/textSrc  : {dataset_info['mode']} / {dataset_info['text_source']}")
+        print(f"  prefix        : {dataset_prefix}")
+        print("========================\n")
 
     # -------------------------
     # （新增）匯入向量 emb_*
@@ -295,8 +432,8 @@ def main():
         return
 
     # 讀取 meta 與 X
-    meta_path = files["meta"]
-    X_path = first_exists(files["X_npz"], files["X_npy"])
+    meta_path = files.get("meta")
+    X_path = first_exists(files.get("X_npz"), files.get("X_npy"))
     if not meta_path or not X_path:
         raise FileNotFoundError(f"meta or X_embed file not found. meta={meta_path}, X={X_path}")
 
@@ -350,11 +487,16 @@ def main():
         rows = []
         for i, row in meta_df.iterrows():
             pid = int(row[pid_col])
-            if bt_col:
+            if bt_col and pd.notna(row[bt_col]) and str(row[bt_col]).strip():
                 bt = to_timestamp(row[bt_col])
             else:
+                # 如果沒有 batch_time，使用 date_cutoff 或當前時間
                 cutoff = manifest.get("date_cutoff")
-                bt = f"{cutoff} 00:00:00" if cutoff else datetime.utcnow().isoformat(sep=" ")
+                if cutoff:
+                    bt = f"{cutoff} 00:00:00"
+                else:
+                    bt = datetime.utcnow().isoformat(sep=" ")
+            
             vec = X[i].astype(np.float32)
             numc = int(row[numc_col]) if numc_col else None
             rows.append((pid, bt, model_id, vec, numc, json.dumps(weights_meta)))
