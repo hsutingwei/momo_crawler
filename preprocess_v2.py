@@ -13,13 +13,19 @@ CKIP 版前處理：
 """
 
 import os
+import sys
 import re
 import csv
 import json
 import unicodedata
 import argparse
-from typing import List, Dict, Any, Tuple, Optional
+import psycopg2
+from typing import List, Dict, Any, Tuple, Optional, Set
 from opencc import OpenCC
+# 添加專案路徑
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from config.database import DatabaseConfig
 
 # 可選：若你想跳過 CKIP（沒有安裝/離線），把 USE_CKIP=False，會退化為簡單的「以空白分詞」
 USE_CKIP = True
@@ -36,11 +42,12 @@ def parse_args():
     return p.parse_args()
 
 args = parse_args()
-keyword = args.keyword or '益生菌'
+keyword = args.keyword or '口罩'
+pipeline_version = '20250812_6c945d166053fd2bcbdd26c18bff77a1502add2d'
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIR_CRAWLER = os.path.join(ROOT, 'crawler')
-DIR_PRE = os.path.join(ROOT, 'preprocess_v2', keyword)
+DIR_PRE = os.path.join(ROOT, 'preprocess_v3', keyword)
 os.makedirs(DIR_PRE, exist_ok=True)
 
 ENCODING = 'utf-8-sig'
@@ -285,7 +292,39 @@ def normalize_numeric_tokens(tokens: List[str], pos: List[str]) -> Dict[str, Any
         'numeric_mentions': mentions
     }
 
-def process_file(src_csv: str, ts: str, keyword: str):
+def split_long_tokens(tokens: List[str], dict_set: Set[str]) -> List[str]:
+    """
+    對 CKIP 斷詞結果做後處理，長詞 (>4) 再用字典(2,3字)切分
+    Args:
+        tokens (List[str]): CKIP 原始斷詞結果
+        dict_set (Set[str]): 字典，包含 2/3 字詞
+    Returns:
+        List[str]: 後處理後的斷詞結果
+    """
+    new_tokens = []
+    for tok in tokens:
+        if len(tok) <= 4:
+            new_tokens.append(tok)
+            continue
+
+        i = 0
+        while i < len(tok):
+            matched = None
+            # 先嘗試 3 字，再 2 字
+            for L in (3, 2):
+                if i + L <= len(tok) and tok[i:i+L] in dict_set:
+                    matched = tok[i:i+L]
+                    break
+            if matched:
+                new_tokens.append(matched)
+                i += len(matched)
+            else:
+                # 沒命中 → fallback 單字切
+                new_tokens.append(tok[i])
+                i += 1
+    return new_tokens
+
+def process_file(src_csv: str, ts: str, keyword: str, token_dict: Set[str]):
     tmp = os.path.join(DIR_PRE, f'_tmp_{os.path.basename(src_csv)}')
     out_norm_csv = os.path.join(DIR_PRE, f'pre_{keyword}_{ts}_norm.csv')
     out_tokens_jsonl = os.path.join(DIR_PRE, f'pre_{keyword}_{ts}_tokens.jsonl')
@@ -326,6 +365,8 @@ def process_file(src_csv: str, ts: str, keyword: str):
 
             # 斷詞
             tokens, poses = ckip_tokenize(norm_text)
+            # 斷詞後處理（長詞 > 4，用字典(2,3字)切分）
+            tokens, poses = split_long_tokens_with_pos(tokens, poses, token_dict)
 
             # 數值/幣值規一
             # num_norm = normalize_numeric_tokens(tokens, poses)
@@ -361,7 +402,62 @@ def process_file(src_csv: str, ts: str, keyword: str):
     print(f"輸出：{out_norm_csv}（{len(out_rows)} 筆）")
     print(f"輸出：{out_tokens_jsonl}（JSONL，每行一筆 tokens/pos/numeric）")
 
+def split_long_tokens_with_pos(tokens: List[str], poses: List[str], dict_set: Set[str]) -> Tuple[List[str], List[str]]:
+    """
+    對 CKIP 斷詞結果做後處理：
+    - 若詞長度 > 4，使用字典 (2,3 字詞) 做後序最大匹配切分
+    - 切分後的新詞 POS 繼承原詞 POS
+    - 保持原始順序
+    Args:
+        tokens (List[str]): CKIP 原始斷詞結果
+        poses (List[str]): CKIP 原始 POS 結果
+        dict_set (Set[str]): 字典（含 2、3 字詞）
+    Returns:
+        Tuple[List[str], List[str]]: 新 tokens 與對應的 POS
+    """
+    new_tokens, new_poses = [], []
+
+    for tok, pos in zip(tokens, poses):
+        if len(tok) <= 4:
+            new_tokens.append(tok)
+            new_poses.append(pos)
+            continue
+
+        i = 0
+        while i < len(tok):
+            matched = None
+            # 優先匹配 3 字，再匹配 2 字
+            for L in (3, 2):
+                if i + L <= len(tok) and tok[i:i+L] in dict_set:
+                    matched = tok[i:i+L]
+                    break
+            if matched:
+                new_tokens.append(matched)
+                new_poses.append(pos)  # POS 繼承
+                i += len(matched)
+            else:
+                # 沒命中就拆單字
+                new_tokens.append(tok[i])
+                new_poses.append(pos)  # POS 繼承
+                i += 1
+
+    return new_tokens, new_poses
+
+
 def main():
+    db = DatabaseConfig()
+    conn = db.get_connection()
+    conn.autocommit = False
+    cur = conn.cursor()
+    try:
+        token_dict = load_token_dict(pipeline_version, cur)
+    except Exception as e:
+        print(f"Error loading token dictionary: {e}")
+        token_dict = set()
+    finally:
+        cur.close()
+        conn.close()
+
     for fname in os.listdir(DIR_CRAWLER):
         if f'{keyword}_商品留言資料_' not in fname or not fname.endswith('.csv'):
             continue
@@ -370,7 +466,7 @@ def main():
             continue
         ts = m.group(1)
         src = os.path.join(DIR_CRAWLER, fname)
-        process_file(src, ts, keyword)
+        process_file(src, ts, keyword, token_dict)
 
 if __name__ == '__main__':
     main()
