@@ -292,38 +292,6 @@ def normalize_numeric_tokens(tokens: List[str], pos: List[str]) -> Dict[str, Any
         'numeric_mentions': mentions
     }
 
-def split_long_tokens(tokens: List[str], dict_set: Set[str]) -> List[str]:
-    """
-    對 CKIP 斷詞結果做後處理，長詞 (>4) 再用字典(2,3字)切分
-    Args:
-        tokens (List[str]): CKIP 原始斷詞結果
-        dict_set (Set[str]): 字典，包含 2/3 字詞
-    Returns:
-        List[str]: 後處理後的斷詞結果
-    """
-    new_tokens = []
-    for tok in tokens:
-        if len(tok) <= 4:
-            new_tokens.append(tok)
-            continue
-
-        i = 0
-        while i < len(tok):
-            matched = None
-            # 先嘗試 3 字，再 2 字
-            for L in (3, 2):
-                if i + L <= len(tok) and tok[i:i+L] in dict_set:
-                    matched = tok[i:i+L]
-                    break
-            if matched:
-                new_tokens.append(matched)
-                i += len(matched)
-            else:
-                # 沒命中 → fallback 單字切
-                new_tokens.append(tok[i])
-                i += 1
-    return new_tokens
-
 def process_file(src_csv: str, ts: str, keyword: str, token_dict: Set[str]):
     tmp = os.path.join(DIR_PRE, f'_tmp_{os.path.basename(src_csv)}')
     out_norm_csv = os.path.join(DIR_PRE, f'pre_{keyword}_{ts}_norm.csv')
@@ -366,7 +334,7 @@ def process_file(src_csv: str, ts: str, keyword: str, token_dict: Set[str]):
             # 斷詞
             tokens, poses = ckip_tokenize(norm_text)
             # 斷詞後處理（長詞 > 4，用字典(2,3字)切分）
-            tokens, poses = split_long_tokens_with_pos(tokens, poses, token_dict)
+            tokens, poses = split_long_tokens_with_pos_rmm(tokens, poses, token_dict)
 
             # 數值/幣值規一
             # num_norm = normalize_numeric_tokens(tokens, poses)
@@ -402,47 +370,56 @@ def process_file(src_csv: str, ts: str, keyword: str, token_dict: Set[str]):
     print(f"輸出：{out_norm_csv}（{len(out_rows)} 筆）")
     print(f"輸出：{out_tokens_jsonl}（JSONL，每行一筆 tokens/pos/numeric）")
 
-def split_long_tokens_with_pos(tokens: List[str], poses: List[str], dict_set: Set[str]) -> Tuple[List[str], List[str]]:
+def load_token_dict(pipeline_version: str, conn) -> Set[str]:
     """
-    對 CKIP 斷詞結果做後處理：
-    - 若詞長度 > 4，使用字典 (2,3 字詞) 做後序最大匹配切分
-    - 切分後的新詞 POS 繼承原詞 POS
-    - 保持原始順序
+    從 comment_tokens 載入長度 2~3 的字詞，作為補充斷詞字典
     Args:
-        tokens (List[str]): CKIP 原始斷詞結果
-        poses (List[str]): CKIP 原始 POS 結果
-        dict_set (Set[str]): 字典（含 2、3 字詞）
+        pipeline_version (str): pipeline_version
+        conn: psycopg2 connection
     Returns:
-        Tuple[List[str], List[str]]: 新 tokens 與對應的 POS
+        Set[str]: token 字典
     """
-    new_tokens, new_poses = [], []
+    sql = """
+        SELECT DISTINCT token
+        FROM comment_tokens
+        WHERE length(token) IN (2,3)
+          AND pipeline_version = %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (pipeline_version,))
+        rows = cur.fetchall()
+    return {r[0] for r in rows}
+
+def split_long_tokens_with_pos_rmm(tokens: List[str], poses: List[str], dict_set: Set[str]) -> Tuple[List[str], List[str]]:
+    """
+    後序長詞優先（最大反向匹配, Right-to-left MaxMatch）：
+    - 對長詞 (>4) 從右往左切，優先 3 字，再 2 字，否則落單字
+    - 子詞 POS 全部繼承原詞 POS
+    - 句子最終順序保持不變
+    """
+    out_tokens, out_poses = [], []
 
     for tok, pos in zip(tokens, poses):
         if len(tok) <= 4:
-            new_tokens.append(tok)
-            new_poses.append(pos)
-            continue
+            out_tokens.append(tok); out_poses.append(pos); continue
 
-        i = 0
-        while i < len(tok):
+        parts: List[str] = []
+        j = len(tok)
+        while j > 0:
             matched = None
-            # 優先匹配 3 字，再匹配 2 字
-            for L in (3, 2):
-                if i + L <= len(tok) and tok[i:i+L] in dict_set:
-                    matched = tok[i:i+L]
-                    break
+            for L in (3, 2):  # 長詞優先
+                if j - L >= 0 and tok[j-L:j] in dict_set:
+                    matched = tok[j-L:j]; break
             if matched:
-                new_tokens.append(matched)
-                new_poses.append(pos)  # POS 繼承
-                i += len(matched)
+                parts.append(matched); j -= len(matched)
             else:
-                # 沒命中就拆單字
-                new_tokens.append(tok[i])
-                new_poses.append(pos)  # POS 繼承
-                i += 1
+                parts.append(tok[j-1]); j -= 1
 
-    return new_tokens, new_poses
+        parts.reverse()  # 還原左→右的原始閱讀順序
+        out_tokens.extend(parts)
+        out_poses.extend([pos] * len(parts))
 
+    return out_tokens, out_poses
 
 def main():
     db = DatabaseConfig()
