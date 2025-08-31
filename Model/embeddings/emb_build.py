@@ -123,6 +123,7 @@ def encode_sentences(model, texts: List[str], batch_size: int = 32,
                 batch_texts,
                 convert_to_numpy=True,
                 show_progress_bar=False,
+                normalize_embeddings=True,
                 fp16=fp16
             )
             embeddings.append(batch_embeddings)
