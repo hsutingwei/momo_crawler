@@ -443,8 +443,10 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         m = eval_metrics(yva, y_pred, y_score)
         
         # 收集這一折的預測結果（用於最佳閾值分析）
+        # 確保 y_score 是一維陣列
+        y_score_flat = np.asarray(y_score).flatten()
         all_y_true.extend(yva.values)
-        all_y_score.extend(y_score)
+        all_y_score.extend(y_score_flat)
         
         # 收集預測結果（用於檔案輸出）
         for i, (true_val, pred_val, score_val) in enumerate(zip(yva, y_pred, y_score)):
@@ -509,40 +511,60 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     all_y_true = np.array(all_y_true)
     all_y_score = np.array(all_y_score)
     
-    # 計算最佳閾值
-    best_thresh, best_prec, best_rec, best_f1 = find_best_threshold(all_y_true, all_y_score)
-    
-    # 繪製圖表
-    plot_path = os.path.join(outdir, f"{base}_threshold_metrics.png")
-    title_suffix = f" ({alg_name}, {fs_method})"
-    plot_threshold_metrics(all_y_true, all_y_score, plot_path, title_suffix=title_suffix)
-    
-    # 輸出最佳閾值與分數摘要
-    print("\n" + "="*60)
-    print(f"最佳閾值分析 - {alg_name} ({fs_method})")
-    print("="*60)
-    print(f"最佳閾值: {best_thresh:.3f}")
-    print(f"Precision: {best_prec:.3f}")
-    print(f"Recall: {best_rec:.3f}")
-    print(f"F1: {best_f1:.3f}")
-    print(f"圖表已儲存至: {plot_path}")
-    print("="*60 + "\n")
-    
-    # 將最佳閾值資訊加入 summary
-    threshold_info = {
-        "best_threshold": float(best_thresh),
-        "best_precision": float(best_prec),
-        "best_recall": float(best_rec),
-        "best_f1": float(best_f1),
-        "threshold_plot": plot_path
-    }
+    # 檢查是否有足夠的數據進行分析
+    if len(all_y_true) == 0 or len(all_y_score) == 0:
+        warnings.warn(f"沒有收集到驗證集預測結果，跳過最佳閾值分析。")
+        threshold_info = {
+            "best_threshold": None,
+            "best_precision": None,
+            "best_recall": None,
+            "best_f1": None,
+            "threshold_plot": None
+        }
+        plot_path = None
+    else:
+        # 確保陣列長度一致
+        min_len = min(len(all_y_true), len(all_y_score))
+        if len(all_y_true) != len(all_y_score):
+            warnings.warn(f"y_true 和 y_score 長度不一致 ({len(all_y_true)} vs {len(all_y_score)})，將截斷至 {min_len}")
+            all_y_true = all_y_true[:min_len]
+            all_y_score = all_y_score[:min_len]
+        
+        # 計算最佳閾值
+        best_thresh, best_prec, best_rec, best_f1, _, _, _, _ = find_best_threshold(all_y_true, all_y_score)
+        
+        # 繪製圖表
+        plot_path = os.path.join(outdir, f"{base}_threshold_metrics.png")
+        title_suffix = f" ({alg_name}, {fs_method})"
+        plot_threshold_metrics(all_y_true, all_y_score, plot_path, title_suffix=title_suffix)
+        
+        # 將最佳閾值資訊加入 summary
+        threshold_info = {
+            "best_threshold": float(best_thresh),
+            "best_precision": float(best_prec),
+            "best_recall": float(best_rec),
+            "best_f1": float(best_f1),
+            "threshold_plot": plot_path
+        }
+        
+        # 輸出最佳閾值與分數摘要
+        print("\n" + "="*60)
+        print(f"最佳閾值分析 - {alg_name} ({fs_method})")
+        print("="*60)
+        print(f"最佳閾值: {best_thresh:.3f}")
+        print(f"Precision: {best_prec:.3f}")
+        print(f"Recall: {best_rec:.3f}")
+        print(f"F1: {best_f1:.3f}")
+        print(f"圖表已儲存至: {plot_path}")
+        print("="*60 + "\n")
     
     # 更新 manifest
     files_dict = {
         "fold_metrics": p_folds,
-        "summary": p_summary,
-        "threshold_plot": plot_path
+        "summary": p_summary
     }
+    if plot_path:
+        files_dict["threshold_plot"] = plot_path
     if p_predictions:
         files_dict["predictions"] = p_predictions
     
