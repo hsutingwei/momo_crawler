@@ -39,7 +39,8 @@ def parse_designate_minute(s: str) -> datetime:
     except ValueError as e:
         raise ValueError(f"時間格式錯誤: {s}，正確格式應為 YYYY-MM-DD HHmm，例如: 2025-07-11 1407") from e
 
-keyword = '維他命'
+# 關鍵字陣列
+keywords = ['口罩', '益生菌', '葉黃素', '維他命', '膠原蛋白', '雞精']
 # designate_dt = None
 designate_dt = parse_designate_minute('2025-07-25 1303')
 
@@ -82,8 +83,9 @@ def parse_args():
     return p.parse_args()
 
 args = parse_args()
+# 如果指定了單個關鍵字，則只處理該關鍵字；否則處理所有關鍵字
 if args.keyword is not None:
-    keyword = args.keyword
+    keywords = [args.keyword]
 
 # 解析指定時間（如果有的話）
 if args.designate_capture_time:
@@ -96,269 +98,275 @@ if args.designate_capture_time:
 
 page = 60
 ecode = 'utf-8-sig'
-product_csv_path = f'{keyword}_商品資料.csv'
-snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
 current_time_str = datetime.now().strftime('%Y%m%d%H%M%S')
 # 是否包含第一次「舊資料」中的銷售量當成一筆快照記錄
 is_new_keyword = False
 include_original_snapshot = is_new_keyword
 
-def is_valid_row(line):
-    # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
-    return re.match(r'^\d+,', line.strip()) is not None
+# 遍歷每個關鍵字
+for keyword in keywords:
+    print(f'\n========== 開始處理關鍵字: {keyword} ==========')
+    
+    # 為每個關鍵字設定對應的檔案路徑
+    product_csv_path = f'{keyword}_商品資料.csv'
+    snapshot_path = f'crawler/{keyword}_商品銷售快照.csv'
 
-def clean_broken_csv(input_path, output_path):
-    with open(input_path, 'r', encoding='utf-8-sig') as infile, open(output_path, 'w', encoding='utf-8-sig') as outfile:
-        buffer = ''
-        for line in infile:
-            line = line.rstrip('\n')
-            if is_valid_row(line):
-                # 若上一行有累積，寫入
-                if buffer:
-                    outfile.write(buffer + '\n')
-                buffer = line
-            else:
-                buffer += ' ' + line  # 合併為同一行（中間加空格避免直接黏住）
-        
-        # 最後一行補寫
-        if buffer:
-            outfile.write(buffer + '\n')
+    def is_valid_row(line):
+        # 判斷行是否為合法的開頭（例如：商品ID 開頭是數字）
+        return re.match(r'^\d+,', line.strip()) is not None
 
-def extract_number(input_string):
-    """
-    從字串中提取數字，支持千分位符號，並將結果轉換為 int 型別。
+    def clean_broken_csv(input_path, output_path):
+        with open(input_path, 'r', encoding='utf-8-sig') as infile, open(output_path, 'w', encoding='utf-8-sig') as outfile:
+            buffer = ''
+            for line in infile:
+                line = line.rstrip('\n')
+                if is_valid_row(line):
+                    # 若上一行有累積，寫入
+                    if buffer:
+                        outfile.write(buffer + '\n')
+                    buffer = line
+                else:
+                    buffer += ' ' + line  # 合併為同一行（中間加空格避免直接黏住）
+            
+            # 最後一行補寫
+            if buffer:
+                outfile.write(buffer + '\n')
 
-    :param input_string: 含有數字的字串
-    :return: 整數型別的數字，若無數字則回傳 None
-    """
-    # 定義正規表達式，匹配含有千分位的數字
-    match = re.search(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?', input_string)
-    if match:
-        # 去掉千分位符號，並轉換為 int
-        number_str = match.group(0).replace(',', '')
-        return int(float(number_str))  # 支援整數和小數
-    return None
+    def extract_number(input_string):
+        """
+        從字串中提取數字，支持千分位符號，並將結果轉換為 int 型別。
+
+        :param input_string: 含有數字的字串
+        :return: 整數型別的數字，若無數字則回傳 None
+        """
+        # 定義正規表達式，匹配含有千分位的數字
+        match = re.search(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?', input_string)
+        if match:
+            # 去掉千分位符號，並轉換為 int
+            number_str = match.group(0).replace(',', '')
+            return int(float(number_str))  # 支援整數和小數
+        return None
     
    
-def get_goods_comments(goods_code, cur_page=1, cust_no="", filter_type="total", host="web", multi_filter_type=None):
-    """
-    呼叫 momoshop API 獲取商品評論列表
+    def get_goods_comments(goods_code, cur_page=1, cust_no="", filter_type="total", host="web", multi_filter_type=None):
+        """
+        呼叫 momoshop API 獲取商品評論列表
 
-    :param goods_code: 商品代碼
-    :param cur_page: 當前頁面 (預設為 1)
-    :param cust_no: 使用者代碼 (預設為空字串)
-    :param filter_type: 篩選類型 (預設為 'total')
-    :param host: 請求來源 (預設為 'web')
-    :param multi_filter_type: 多重篩選類型 (預設為 ['hasComment'])
-    :return: 回傳 JSON 格式的評論資料
-    """
-    if multi_filter_type is None:
-        multi_filter_type = ["hasComment"]
+        :param goods_code: 商品代碼
+        :param cur_page: 當前頁面 (預設為 1)
+        :param cust_no: 使用者代碼 (預設為空字串)
+        :param filter_type: 篩選類型 (預設為 'total')
+        :param host: 請求來源 (預設為 'web')
+        :param multi_filter_type: 多重篩選類型 (預設為 ['hasComment'])
+        :return: 回傳 JSON 格式的評論資料
+        """
+        if multi_filter_type is None:
+            multi_filter_type = ["hasComment"]
 
-    url = "https://eccapi.momoshop.com.tw/user/getGoodsCommentList"
-    headers = {
-        "Content-Type": "application/json",  # 設定為 JSON 格式
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-    }
-    payload = {
-        "curPage": cur_page,
-        "custNo": cust_no,
-        "filterType": filter_type,
-        "goodsCode": str(goods_code),
-        "host": host,
-        "multiFilterType": multi_filter_type
-    }
+        url = "https://eccapi.momoshop.com.tw/user/getGoodsCommentList"
+        headers = {
+            "Content-Type": "application/json",  # 設定為 JSON 格式
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        }
+        payload = {
+            "curPage": cur_page,
+            "custNo": cust_no,
+            "filterType": filter_type,
+            "goodsCode": str(goods_code),
+            "host": host,
+            "multiFilterType": multi_filter_type
+        }
 
-    try:
-        # 發送 POST 請求
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()  # 若 HTTP 狀態碼為 4xx 或 5xx，則拋出異常
+        try:
+            # 發送 POST 請求
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()  # 若 HTTP 狀態碼為 4xx 或 5xx，則拋出異常
 
-        # 解析回應 JSON 資料
-        data = response.json()
-        return data
-    except requests.RequestException as e:
-        print(f"HTTP 請求錯誤: {e}")
-        return None
-    except json.JSONDecodeError:
-        print("無法解析回應的 JSON 資料")
-        return None
+            # 解析回應 JSON 資料
+            data = response.json()
+            return data
+        except requests.RequestException as e:
+            print(f"HTTP 請求錯誤: {e}")
+            return None
+        except json.JSONDecodeError:
+            print("無法解析回應的 JSON 資料")
+            return None
 
-def get_current_sales(goods_code, host="momoshop"):
-    url = "https://eccapi.momoshop.com.tw/user/getGoodsComment"
-    headers = {
-        "Content-Type": "application/json",  # 設定為 JSON 格式
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-    }
-    payload = {
-        "goodsCode": str(goods_code),
-        "host": host,
-    }
+    def get_current_sales(goods_code, host="momoshop"):
+        url = "https://eccapi.momoshop.com.tw/user/getGoodsComment"
+        headers = {
+            "Content-Type": "application/json",  # 設定為 JSON 格式
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        }
+        payload = {
+            "goodsCode": str(goods_code),
+            "host": host,
+        }
 
-    try:
-        # 發送 POST 請求
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()  # 若 HTTP 狀態碼為 4xx 或 5xx，則拋出異常
+        try:
+            # 發送 POST 請求
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()  # 若 HTTP 狀態碼為 4xx 或 5xx，則拋出異常
 
-        # 解析回應 JSON 資料
-        data = response.json()
-        if data is None or data.get("saleCount") is None:
-            print(f"【警告】無法取得 {goods_code} 的銷售數")
-            return 0
-        sales_text = data.get("saleCount")
-        count = extract_number(sales_text)
-        if count is None:
-            return 0
-        return str(count) + ('萬' if sales_text.endswith('萬') else '')
-    except requests.RequestException as e:
-        print(f"HTTP 請求錯誤: {e}")
-        return None
-    except json.JSONDecodeError:
-        print("無法解析回應的 JSON 資料")
-        return None
+            # 解析回應 JSON 資料
+            data = response.json()
+            if data is None or data.get("saleCount") is None:
+                print(f"【警告】無法取得 {goods_code} 的銷售數")
+                return 0
+            sales_text = data.get("saleCount")
+            count = extract_number(sales_text)
+            if count is None:
+                return 0
+            return str(count) + ('萬' if sales_text.endswith('萬') else '')
+        except requests.RequestException as e:
+            print(f"HTTP 請求錯誤: {e}")
+            return None
+        except json.JSONDecodeError:
+            print("無法解析回應的 JSON 資料")
+            return None
 
-def save_sales_snapshot_long_format():
-    if not os.path.exists(product_csv_path):
-        print(f"找不到商品資料檔案：{product_csv_path}")
-        return
+    def save_sales_snapshot_long_format():
+        if not os.path.exists(product_csv_path):
+            print(f"找不到商品資料檔案：{product_csv_path}")
+            return
 
-    df = pd.read_csv(product_csv_path, encoding=ecode)
-    all_rows = []
+        df = pd.read_csv(product_csv_path, encoding=ecode)
+        all_rows = []
 
-    # ✅ 加入第一次原始資料的銷售快照
-    if include_original_snapshot:
+        # ✅ 加入第一次原始資料的銷售快照
+        if include_original_snapshot:
+            for _, row in df.iterrows():
+                all_rows.append([
+                    row['商品ID'],
+                    row['商品名稱'],
+                    row['價格'],
+                    row['銷售數量'],
+                    row['商品連結'],
+                    current_time_str
+                ])
+            print(f'已從原始商品資料加入 {len(df)} 筆初始快照')
+
+        # ✅ 爬取當下銷售量
+        service = ChromeService(ChromeDriverManager().install())
+        options = webdriver.ChromeOptions()
+        options.add_experimental_option("prefs", {"profile.default_content_setting_values.notifications": 2})
+        driver = webdriver.Chrome(service=service, options=options)
+
         for _, row in df.iterrows():
+            product_id = row['商品ID']
+            product_name = row['商品名稱']
+            price = row['價格']
+            link = row['商品連結']
+
+            latest_sales = get_current_sales(product_id)
+            if latest_sales is None:
+                print(f"【警告】無法取得 {product_name} 的銷售數")
+                latest_sales = 0
+
             all_rows.append([
-                row['商品ID'],
-                row['商品名稱'],
-                row['價格'],
-                row['銷售數量'],
-                row['商品連結'],
+                product_id,
+                product_name,
+                price,
+                latest_sales,
+                link,
                 current_time_str
             ])
-        print(f'已從原始商品資料加入 {len(df)} 筆初始快照')
+            time.sleep(random.uniform(0.5, 1.2))
 
-    # ✅ 爬取當下銷售量
-    service = ChromeService(ChromeDriverManager().install())
+        driver.quit()
+
+        if not all_rows:
+            print("⚠ 無可寫入的快照資料")
+            return
+
+        # 準備新快照資料表
+        columns = ['商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間']
+        df_snapshot = pd.DataFrame(all_rows, columns=columns)  # type: ignore
+
+        os.makedirs('crawler', exist_ok=True)
+
+        # ✅ 若已有快照檔案，先讀出比對，避免重複寫入
+        if os.path.exists(snapshot_path):
+            try:
+                df_existing = pd.read_csv(snapshot_path, encoding=ecode, dtype={'商品ID': str})
+                # 轉型後進行去重（根據商品ID+擷取時間）
+                before_len = len(df_snapshot)
+                df_combined = pd.concat([df_existing, df_snapshot], ignore_index=True)
+                df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
+                new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
+
+                df_snapshot = new_records[df_snapshot.columns]  # type: ignore
+                actual_new = len(df_snapshot)
+                if actual_new == 0:
+                    print("🚫 沒有新增的快照資料，跳過寫入")
+                    return
+                else:
+                    print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
+                    df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)  # type: ignore
+            except Exception as e:
+                print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
+        else:
+            # 第一次建立快照檔
+            df_snapshot.to_csv(snapshot_path, encoding=ecode, index=False)
+            print(f"✅ 首次建立快照檔，寫入 {len(df_snapshot)} 筆")
+
+    # 自動下載ChromeDriver
+    # service = ChromeService(executable_path=ChromeDriverManager().install())
+
+    # 關閉通知提醒
     options = webdriver.ChromeOptions()
-    options.add_experimental_option("prefs", {"profile.default_content_setting_values.notifications": 2})
-    driver = webdriver.Chrome(service=service, options=options)
+    prefs = {"profile.default_content_setting_values.notifications" : 2}
+    options.add_experimental_option("prefs",prefs)
+    # 不載入圖片，提升爬蟲速度
+    # options.add_argument('blink-settings=imagesEnabled=false') 
 
-    for _, row in df.iterrows():
-        product_id = row['商品ID']
-        product_name = row['商品名稱']
-        price = row['價格']
-        link = row['商品連結']
+    # 開啟瀏覽器
+    driver = webdriver.Chrome(service=Service(), chrome_options=options)
+    time.sleep(random.randint(5,10))
 
-        latest_sales = get_current_sales(product_id)
-        if latest_sales is None:
-            print(f"【警告】無法取得 {product_name} 的銷售數")
-            latest_sales = 0
+    # 開啟網頁，進到首頁
+    driver.get('https://www.momoshop.com.tw' )
+    time.sleep(random.randint(5,10))
 
-        all_rows.append([
-            product_id,
-            product_name,
-            price,
-            latest_sales,
-            link,
-            current_time_str
-        ])
-        time.sleep(random.uniform(0.5, 1.2))
+    #---------- Part 1. 主要先抓下商品名稱與連結，之後再慢慢補上詳細資料 ----------
+    print('---------- 開始進行商品爬蟲 ----------')
+    tStart = time.time()#計時開始
+    # 準備用來存放資料的陣列
+    itemid = []
+    shopid =[]
+    name = []
+    link = []
+    price = []
+    sales = []
 
-    driver.quit()
-
-    if not all_rows:
-        print("⚠ 無可寫入的快照資料")
-        return
-
-    # 準備新快照資料表
-    columns = ['商品ID', '商品名稱', '價格', '銷售數量', '商品連結', '擷取時間']
-    df_snapshot = pd.DataFrame(all_rows, columns=columns)  # type: ignore
-
-    os.makedirs('crawler', exist_ok=True)
-
-    # ✅ 若已有快照檔案，先讀出比對，避免重複寫入
-    if os.path.exists(snapshot_path):
-        try:
-            df_existing = pd.read_csv(snapshot_path, encoding=ecode, dtype={'商品ID': str})
-            # 轉型後進行去重（根據商品ID+擷取時間）
-            before_len = len(df_snapshot)
-            df_combined = pd.concat([df_existing, df_snapshot], ignore_index=True)
-            df_combined.drop_duplicates(subset=['商品ID', '擷取時間'], keep='first', inplace=True)
-            new_records = df_combined[~df_combined.duplicated(subset=['商品ID', '擷取時間'], keep='last')]
-
-            df_snapshot = new_records[df_snapshot.columns]  # type: ignore
-            actual_new = len(df_snapshot)
-            if actual_new == 0:
-                print("🚫 沒有新增的快照資料，跳過寫入")
-                return
-            else:
-                print(f"✅ 實際寫入 {actual_new} 筆去重後的新快照資料")
-                df_snapshot.to_csv(snapshot_path, mode='a', encoding=ecode, index=False, header=False)  # type: ignore
-        except Exception as e:
-            print(f"❌ 讀取或處理現有快照檔案時出錯：{e}")
-    else:
-        # 第一次建立快照檔
-        df_snapshot.to_csv(snapshot_path, encoding=ecode, index=False)
-        print(f"✅ 首次建立快照檔，寫入 {len(df_snapshot)} 筆")
-
-# 自動下載ChromeDriver
-# service = ChromeService(executable_path=ChromeDriverManager().install())
-
-# 關閉通知提醒
-options = webdriver.ChromeOptions()
-prefs = {"profile.default_content_setting_values.notifications" : 2}
-options.add_experimental_option("prefs",prefs)
-# 不載入圖片，提升爬蟲速度
-# options.add_argument('blink-settings=imagesEnabled=false') 
-
-# 開啟瀏覽器
-driver = webdriver.Chrome(service=Service(), chrome_options=options)
-time.sleep(random.randint(5,10))
-
-# 開啟網頁，進到首頁
-driver.get('https://www.momoshop.com.tw' )
-time.sleep(random.randint(5,10))
-
-#---------- Part 1. 主要先抓下商品名稱與連結，之後再慢慢補上詳細資料 ----------
-print('---------- 開始進行商品爬蟲 ----------')
-tStart = time.time()#計時開始
-# 準備用來存放資料的陣列
-itemid = []
-shopid =[]
-name = []
-link = []
-price = []
-sales = []
-
-# 去重 set：商品列表與留言爬蟲
-seen_comment_products = set()
-if (is_new_keyword):
-    for i in tqdm(range(int(page))):
-    #for i in tqdm(range(1)):
-        driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
-        time.sleep(random.uniform(0.8, 1.5))
-        # 滾動頁面
-        for scroll in range(6):
-            driver.execute_script('window.scrollBy(0,1000)')
-            time.sleep(random.uniform(1.2, 2))
+    # 去重 set：商品列表與留言爬蟲
+    seen_comment_products = set()
+    if (is_new_keyword):
+        for i in tqdm(range(int(page))):
+        #for i in tqdm(range(1)):
+            driver.get('https://www.momoshop.com.tw/search/searchShop.jsp?keyword=' + keyword + '&cateLevel=0&_isFuzzy=0&searchType=1&curPage=' + str(i))
+            time.sleep(random.uniform(0.8, 1.5))
+            # 滾動頁面
+            for scroll in range(6):
+                driver.execute_script('window.scrollBy(0,1000)')
+                time.sleep(random.uniform(1.2, 2))
         
-        # 取得商品內容
-        for block in driver.find_elements(by=By.XPATH, value='//div[contains(@class, "goodsUrl")]'):
-            # 將整個網站的Html進行解析
-            inner_html = block.get_attribute('innerHTML')
-            if inner_html is None:
-                continue
-            soup = BeautifulSoup(inner_html, "html.parser")
+            # 取得商品內容
+            for block in driver.find_elements(by=By.XPATH, value='//div[contains(@class, "goodsUrl")]'):
+                # 將整個網站的Html進行解析
+                inner_html = block.get_attribute('innerHTML')
+                if inner_html is None:
+                    continue
+                soup = BeautifulSoup(inner_html, "html.parser")
 
-            tname_elem = soup.select_one('.prdName')
-            if tname_elem is None:
-                print('抓不到商品名稱，直接跳過')
-                continue
-            tname = tname_elem.text.strip()
-            if len(tname) <= 0:
-                print('抓不到資料，直接是空的')
-                continue # 沒抓到這個商品就別爬了  
+                tname_elem = soup.select_one('.prdName')
+                if tname_elem is None:
+                    print('抓不到商品名稱，直接跳過')
+                    continue
+                tname = tname_elem.text.strip()
+                if len(tname) <= 0:
+                    print('抓不到資料，直接是空的')
+                    continue # 沒抓到這個商品就別爬了  
             
             tmpSales_elem = soup.select_one('.totalSales')
             if tmpSales_elem is None:
