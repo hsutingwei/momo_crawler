@@ -92,147 +92,39 @@ def fetch_comments_with_features_and_label(
     NOTE: This returns a *wide* table with scalar features; TF tokens are *not* pivoted here.
           Use `fetch_comment_token_pairs_for_vocab` to build sparse TF features for chosen vocabulary.
     """
-    # SQL:
-    # 1) derive per-product per-batch representative sales (align snapshots to comment batches; take last snapshot in batch)
-    # 2) for each product, get current and next batch sales via LEAD
-    # 3) join back to comments (by product_id and batch_time = pc.capture_time), produce label
+    # 改為呼叫新的資料集函數（SQL functions 已於資料庫中建立）
     sql = """
-    WITH comment_batches AS (
-      SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
-      FROM product_comments pc
-      JOIN products p ON p.id = pc.product_id
-      GROUP BY p.keyword, pc.product_id, pc.capture_time
-    ),
-    snap_mapped AS (
-      SELECT
-        s.product_id,
-        p.keyword,
-        s.capture_time AS snapshot_time,
-        s.sales_count,
-        cb_near.batch_time
-      FROM sales_snapshots s
-      JOIN products p ON p.id = s.product_id
-      LEFT JOIN LATERAL (
-        SELECT cb.batch_time
-        FROM comment_batches cb
-        WHERE cb.keyword = p.keyword
-          AND cb.product_id = s.product_id
-          AND cb.batch_time <= s.capture_time
-        ORDER BY cb.batch_time DESC
-        LIMIT 1
-      ) AS cb_near ON TRUE
-    ),
-    batch_repr AS (
-      SELECT *
-      FROM (
-        SELECT
-          product_id,
-          keyword,
-          batch_time,
-          sales_count,
-          snapshot_time,
-          ROW_NUMBER() OVER (
-            PARTITION BY product_id, batch_time
-            ORDER BY snapshot_time DESC
-          ) AS rn
-        FROM snap_mapped
-        WHERE batch_time IS NOT NULL
-      ) t
-      WHERE rn = 1
-    ),
-    prod_batch_sales AS (
-      SELECT
-        product_id,
-        batch_time,
-        sales_count AS cur_sales,
-        LEAD(sales_count) OVER (
-          PARTITION BY product_id ORDER BY batch_time
-        ) AS next_sales
-      FROM batch_repr
-    ),
-    comments_base AS (
-      SELECT
-        pc.comment_id,
-        pc.product_id,
-        p.name,
-        p.price::float AS price,
-        p.keyword,
-        pc.image_urls,
-        pc.video_url,
-        pc.reply_content,
-        pc.score::float AS score,
-        pc.like_count::int AS like_count,
-        pc.capture_time AS comment_capture_time
-      FROM product_comments pc
-      JOIN products p ON p.id = pc.product_id
-    ),
-    comments_labeled AS (
-      SELECT
-        cb.comment_id,
-        cb.product_id,
-        cb.name,
-        cb.price,
-        cb.keyword,
-        cb.image_urls,
-        cb.video_url,
-        cb.reply_content,
-        cb.score,
-        cb.like_count,
-        cb.comment_capture_time,
-        pbs.batch_time,
-        pbs.cur_sales,
-        pbs.next_sales,
-        CASE
-          WHEN pbs.next_sales IS NULL THEN 0
-          WHEN pbs.next_sales > pbs.cur_sales THEN 1
-          ELSE 0
-        END AS y_next_increase
-      FROM comments_base cb
-      JOIN prod_batch_sales pbs
-        ON pbs.product_id = cb.product_id
-       AND pbs.batch_time = cb.comment_capture_time
-    )
     SELECT
-      cl.comment_id,
-      cl.product_id,
-      cl.name,
-      cl.price,
-      cl.keyword,
-      /* image flags */
-      CASE
-        WHEN cl.image_urls IS NULL THEN 0
-        WHEN jsonb_typeof(cl.image_urls) <> 'array' THEN 0
-        WHEN jsonb_array_length(cl.image_urls) > 0 THEN 1 ELSE 0
-      END AS has_image_urls,
-      CASE
-        WHEN cl.image_urls IS NULL THEN 0
-        WHEN jsonb_typeof(cl.image_urls) <> 'array' THEN 0
-        ELSE jsonb_array_length(cl.image_urls)
-      END AS image_urls_count,
-      /* video / reply flags */
-      CASE WHEN cl.video_url IS NOT NULL AND cl.video_url <> '' THEN 1 ELSE 0 END AS has_video_url,
-      CASE WHEN cl.reply_content IS NOT NULL AND cl.reply_content <> '' THEN 1 ELSE 0 END AS has_reply_content,
-      /* scores */
-      cl.score,
-      cl.like_count,
-      /* batch keys & label */
-      cl.comment_capture_time,
-      cl.batch_time AS batch_capture_time,
-      cl.cur_sales,
-      cl.next_sales,
-      cl.y_next_increase
-    FROM comments_labeled cl
-    /* optional time-based filtering happens in Python after fetch */
-    ;
+      comment_id,
+      product_id,
+      name,
+      price,
+      keyword,
+      has_image_urls,
+      image_urls_count,
+      has_video_url,
+      has_reply_content,
+      score,
+      like_count,
+      comment_capture_time,
+      batch_capture_time,
+      cur_sales,
+      next_sales,
+      y_next_increase
+    FROM ml_fn_build_comment_dataset_v2();
     """
     df = pd.read_sql(sql, conn, parse_dates=["comment_capture_time", "batch_capture_time"])
     # 可選：丟掉沒有下一批（label 為 NULL）的資料，避免混淆
     if drop_rows_without_next_batch:
         df = df.loc[df["y_next_increase"].notna()].copy()
     df["y_next_increase"] = df["y_next_increase"].astype(int)
-    # 依 cutoff 做 train/test mask（先留給上層使用）
+    # 依 cutoff 做 train/test mask；統一使用 UTC-aware 比較，避免 tz 衝突
     if date_cutoff:
-        df["is_train"] = (df["batch_capture_time"] <= pd.to_datetime(date_cutoff))
+        cutoff_ts = pd.to_datetime(date_cutoff, utc=True)
+        # 若 batch_capture_time 非 tz-aware，補齊為 UTC
+        if df["batch_capture_time"].dt.tz is None:
+            df["batch_capture_time"] = df["batch_capture_time"].dt.tz_localize("UTC")
+        df["is_train"] = (df["batch_capture_time"] <= cutoff_ts)
     else:
         df["is_train"] = True
     return df
