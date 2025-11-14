@@ -1,0 +1,24 @@
+2025-11-14 21:25:02 | WARNING  | Cannot detect or read from CBR archives
+2025-11-14 21:25:02 | INFO     | Starting Codex v1.8.17
+2025-11-14 21:25:02 | INFO     | Ensuring database is correct and up to date...
+2025-11-14 21:25:12 | SUCCESS  | Database ready.
+2025-11-14 21:25:12 | SUCCESS  | Created admin user.
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Auto Update = False
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Banner Text = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Folder View = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Import Metadata = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Lazy Import Metadata = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Non Users = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Registration = True
+2025-11-14 21:25:12 | INFO     | Created AdminFlag: Send Telemetry = True
+2025-11-14 21:25:14 | INFO     | Created Custom Covers Dir settings in the db.
+2025-11-14 21:25:14 | INFO     | root_path: 
+2025-11-14 21:25:14 | SUCCESS  | Running Codex v1.8.17
+2025-11-14 21:25:14 | SUCCESS  | BroadcastListener started.
+2025-11-14 21:25:15 | INFO     | LibrarianDaemon started all threads.
+2025-11-14 21:25:15 | SUCCESS  | LibrarianDaemon ready for tasks.
+2025-11-14 21:25:15 | INFO     | Started watching library C:\YvesProject\中央\線上評論\momo_crawler-main\config\custom-covers with poll
+2025-11-14 21:25:15 | INFO     | Library C:\YvesProject\中央\線上評論\momo_crawler-main\config\custom-covers waiting for manual poll.
+2025-11-14 21:25:16 | INFO     | Looking for search entries to update since the fracturing of the multiverse...
+2025-11-14 21:25:16 | INFO     | Looking for missing search entries to create...
+2025-11-14 21:25:16 | SUCCESS  | Search index found to be already synced in a moment.

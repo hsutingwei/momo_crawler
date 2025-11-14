@@ -33,19 +33,22 @@ def fetch_top_terms(conn,
                     pipeline_version: Optional[str] = None,
                     product_id: Optional[int] = None,
                     min_len: int = 2,
-                    max_len: int = 4) -> List[str]:
+                    max_len: int = 4,
+                    date_cutoff: Optional[str] = None) -> List[str]:
     """
     Return global (or per product) TF-IDF top-N tokens for building binary features.
 
     - If product_id is None => global Top-N across all comments
     - Else => Top-N under the specified product
     - If pipeline_version provided and nlp_stopwords exists, stopwords will be excluded.
+    - If date_cutoff provided, only use comments before the cutoff date.
     """
     sql = """
     WITH prod_comments AS (
       SELECT pc.comment_id
       FROM product_comments pc
       WHERE (%(product_id)s IS NULL OR pc.product_id = %(product_id)s)
+        AND (%(date_cutoff)s IS NULL OR pc.capture_time <= %(date_cutoff)s::timestamp)
     )
     SELECT
       ts.token,
@@ -70,7 +73,8 @@ def fetch_top_terms(conn,
             pipeline_version=pipeline_version,
             min_len=min_len,
             max_len=max_len,
-            top_n=top_n
+            top_n=top_n,
+            date_cutoff=date_cutoff
         ))
         rows = cur.fetchall()
     return [r["token"] for r in rows]
@@ -93,6 +97,7 @@ def fetch_comments_with_features_and_label(
           Use `fetch_comment_token_pairs_for_vocab` to build sparse TF features for chosen vocabulary.
     """
     # 改為呼叫新的資料集函數（SQL functions 已於資料庫中建立）
+    # 注意：ml_fn_build_comment_dataset_v2() 不接受參數，所以需要在 Python 層面篩選
     sql = """
     SELECT
       comment_id,
@@ -118,6 +123,7 @@ def fetch_comments_with_features_and_label(
     if drop_rows_without_next_batch:
         df = df.loc[df["y_next_increase"].notna()].copy()
     df["y_next_increase"] = df["y_next_increase"].astype(int)
+    
     # 依 cutoff 做 train/test mask；統一使用 UTC-aware 比較，避免 tz 衝突
     if date_cutoff:
         cutoff_ts = pd.to_datetime(date_cutoff, utc=True)
@@ -125,6 +131,8 @@ def fetch_comments_with_features_and_label(
         if df["batch_capture_time"].dt.tz is None:
             df["batch_capture_time"] = df["batch_capture_time"].dt.tz_localize("UTC")
         df["is_train"] = (df["batch_capture_time"] <= cutoff_ts)
+        # 重要：在 comment_level 模式下，只使用 cutoff 之前的資料進行訓練
+        # 這裡只標記 is_train，實際篩選應該在 load_training_set 中進行
     else:
         df["is_train"] = True
     return df
@@ -215,16 +223,26 @@ def load_training_set(
             date_cutoff=date_cutoff,
             drop_rows_without_next_batch=True,
         )
+        
+        # 重要：如果提供了 date_cutoff，只使用 is_train=True 的資料進行訓練
+        # 這樣才能確保訓練資料和測試資料的正確分離
+        if date_cutoff and "is_train" in base.columns:
+            base = base[base["is_train"]].copy()
+            if base.empty:
+                raise ValueError(f"使用 date_cutoff={date_cutoff} 後，沒有找到任何訓練資料。請檢查日期範圍。")
 
-        # 2) 取 vocab（Top-N token）
+        # 2) 取 vocab（Top-N token）- 只從訓練資料中計算（如果提供了 date_cutoff）
         if vocab_scope == "product":
             # 這裡可以依 product 分別求 Top-N，再合併去重；先用 global 比較直覺
-            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None)
+            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None, date_cutoff=date_cutoff)
         else:
-            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None)
+            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None, date_cutoff=date_cutoff)
 
         # 3) 取 (comment_id, token) 對，再轉成 1/0 稀疏矩陣
+        # 注意：這裡的 pairs 應該只包含訓練資料中的 comment_id
         pairs = fetch_comment_token_pairs_for_vocab(conn, vocab_tokens=vocab, pipeline_version=pipeline_version)
+        # 只保留訓練資料中的 comment_id
+        pairs = pairs[pairs["comment_id"].isin(base["comment_id"])].copy()
         id_index = pd.Series(range(len(base)), index=base["comment_id"])  # map comment_id to row index
         X_tfidf = build_sparse_binary_matrix(pairs, vocab=vocab, id_index=id_index)
 
@@ -252,9 +270,15 @@ def load_product_level_training_set(
     date_cutoff: str = "2025-06-25",
     top_n: int = 100,
     pipeline_version: Optional[str] = None,
-    vocab_mode: str = "global",          # 先支援 'global'，之後可擴充 'per_keyword' / 'single_keyword'
+    vocab_mode: str = "global",          # ?????? 'global'??? 'per_keyword' / 'single_keyword'
     single_keyword: Optional[str] = None,
     exclude_products: Optional[List[int]] = None,
+    label_delta_threshold: float = 1.0,
+    label_ratio_threshold: Optional[float] = None,
+    label_max_gap_days: Optional[float] = None,
+    min_comments: int = 0,
+    keyword_whitelist: Optional[List[str]] = None,
+    keyword_blacklist: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
     """
     回傳 (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
@@ -270,7 +294,10 @@ def load_product_level_training_set(
         params = {
             "cutoff": date_cutoff,
             "excluded": exclude_products if exclude_products else [-1],
-            "single_kw": single_keyword
+            "single_kw": single_keyword,
+            "delta_threshold": label_delta_threshold,
+            "ratio_threshold": label_ratio_threshold,
+            "max_gap_seconds": (label_max_gap_days * 86400.0) if label_max_gap_days else None
         }
 
         # 1) 對齊序列 & y（post-cutoff 是否曾增加）
@@ -323,6 +350,7 @@ def load_product_level_training_set(
             product_id,
             keyword,
             batch_time,
+            snapshot_time,
             sales_count,
             LAG(sales_count) OVER (PARTITION BY product_id ORDER BY batch_time) AS prev_sales
           FROM batch_repr
@@ -330,10 +358,23 @@ def load_product_level_training_set(
         y_post AS (
           SELECT
             product_id,
-            MAX(CASE WHEN batch_time > %(cutoff)s::timestamp
-                        AND prev_sales IS NOT NULL
-                        AND sales_count > prev_sales
-                     THEN 1 ELSE 0 END) AS y
+            MAX(
+              CASE
+                WHEN batch_time > %(cutoff)s::timestamp
+                     AND prev_sales IS NOT NULL
+                     AND (sales_count - prev_sales) >= %(delta_threshold)s
+                     AND (
+                          %(ratio_threshold)s IS NULL
+                          OR prev_sales = 0
+                          OR (((sales_count::float / NULLIF(prev_sales, 0)) - 1) >= %(ratio_threshold)s)
+                     )
+                     AND (
+                          %(max_gap_seconds)s IS NULL
+                          OR EXTRACT(EPOCH FROM (snapshot_time - batch_time)) <= %(max_gap_seconds)s
+                     )
+                THEN 1 ELSE 0
+              END
+            ) AS y
           FROM seq
           GROUP BY product_id
         )
@@ -468,6 +509,14 @@ def load_product_level_training_set(
         # 3) y merge（沒 y 的補 0）
         df = dense.merge(y_df, on="product_id", how="left")
         df["y"] = df["y"].fillna(0).astype(int)
+
+        # 3.5) Sampling filters
+        if keyword_whitelist:
+            df = df[df["keyword"].isin(keyword_whitelist)]
+        if keyword_blacklist:
+            df = df[~df["keyword"].isin(keyword_blacklist)]
+        if min_comments > 0 and "comment_count_pre" in df.columns:
+            df = df[df["comment_count_pre"] >= min_comments]
 
         # 4) TF vocab（global, cutoff 以前）
         vocab = fetch_top_terms(conn,
