@@ -37,3 +37,5 @@ preprocess_v3
 /Model/findbest
 /config/cache
 /Model/outputs_v1
+/Model/outputs_v1_sweep
+/Model/outputs_phase2
