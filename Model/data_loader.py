@@ -33,22 +33,19 @@ def fetch_top_terms(conn,
                     pipeline_version: Optional[str] = None,
                     product_id: Optional[int] = None,
                     min_len: int = 2,
-                    max_len: int = 4,
-                    date_cutoff: Optional[str] = None) -> List[str]:
+                    max_len: int = 4) -> List[str]:
     """
     Return global (or per product) TF-IDF top-N tokens for building binary features.
 
     - If product_id is None => global Top-N across all comments
     - Else => Top-N under the specified product
     - If pipeline_version provided and nlp_stopwords exists, stopwords will be excluded.
-    - If date_cutoff provided, only use comments before the cutoff date.
     """
     sql = """
     WITH prod_comments AS (
       SELECT pc.comment_id
       FROM product_comments pc
       WHERE (%(product_id)s IS NULL OR pc.product_id = %(product_id)s)
-        AND (%(date_cutoff)s IS NULL OR pc.capture_time <= %(date_cutoff)s::timestamp)
     )
     SELECT
       ts.token,
@@ -73,8 +70,7 @@ def fetch_top_terms(conn,
             pipeline_version=pipeline_version,
             min_len=min_len,
             max_len=max_len,
-            top_n=top_n,
-            date_cutoff=date_cutoff
+            top_n=top_n
         ))
         rows = cur.fetchall()
     return [r["token"] for r in rows]
@@ -97,7 +93,6 @@ def fetch_comments_with_features_and_label(
           Use `fetch_comment_token_pairs_for_vocab` to build sparse TF features for chosen vocabulary.
     """
     # 改為呼叫新的資料集函數（SQL functions 已於資料庫中建立）
-    # 注意：ml_fn_build_comment_dataset_v2() 不接受參數，所以需要在 Python 層面篩選
     sql = """
     SELECT
       comment_id,
@@ -123,7 +118,6 @@ def fetch_comments_with_features_and_label(
     if drop_rows_without_next_batch:
         df = df.loc[df["y_next_increase"].notna()].copy()
     df["y_next_increase"] = df["y_next_increase"].astype(int)
-    
     # 依 cutoff 做 train/test mask；統一使用 UTC-aware 比較，避免 tz 衝突
     if date_cutoff:
         cutoff_ts = pd.to_datetime(date_cutoff, utc=True)
@@ -131,8 +125,6 @@ def fetch_comments_with_features_and_label(
         if df["batch_capture_time"].dt.tz is None:
             df["batch_capture_time"] = df["batch_capture_time"].dt.tz_localize("UTC")
         df["is_train"] = (df["batch_capture_time"] <= cutoff_ts)
-        # 重要：在 comment_level 模式下，只使用 cutoff 之前的資料進行訓練
-        # 這裡只標記 is_train，實際篩選應該在 load_training_set 中進行
     else:
         df["is_train"] = True
     return df
@@ -223,26 +215,16 @@ def load_training_set(
             date_cutoff=date_cutoff,
             drop_rows_without_next_batch=True,
         )
-        
-        # 重要：如果提供了 date_cutoff，只使用 is_train=True 的資料進行訓練
-        # 這樣才能確保訓練資料和測試資料的正確分離
-        if date_cutoff and "is_train" in base.columns:
-            base = base[base["is_train"]].copy()
-            if base.empty:
-                raise ValueError(f"使用 date_cutoff={date_cutoff} 後，沒有找到任何訓練資料。請檢查日期範圍。")
 
-        # 2) 取 vocab（Top-N token）- 只從訓練資料中計算（如果提供了 date_cutoff）
+        # 2) 取 vocab（Top-N token）
         if vocab_scope == "product":
             # 這裡可以依 product 分別求 Top-N，再合併去重；先用 global 比較直覺
-            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None, date_cutoff=date_cutoff)
+            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None)
         else:
-            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None, date_cutoff=date_cutoff)
+            vocab = fetch_top_terms(conn, top_n=top_n, pipeline_version=pipeline_version, product_id=None)
 
         # 3) 取 (comment_id, token) 對，再轉成 1/0 稀疏矩陣
-        # 注意：這裡的 pairs 應該只包含訓練資料中的 comment_id
         pairs = fetch_comment_token_pairs_for_vocab(conn, vocab_tokens=vocab, pipeline_version=pipeline_version)
-        # 只保留訓練資料中的 comment_id
-        pairs = pairs[pairs["comment_id"].isin(base["comment_id"])].copy()
         id_index = pd.Series(range(len(base)), index=base["comment_id"])  # map comment_id to row index
         X_tfidf = build_sparse_binary_matrix(pairs, vocab=vocab, id_index=id_index)
 
