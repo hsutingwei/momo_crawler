@@ -80,23 +80,23 @@ def parse_args():
     ap.add_argument("--mode", type=str, default="product_level",
                     choices=["product_level", "comment_level"])
     ap.add_argument("--date-cutoff", type=str, default="2025-06-25")
-    ap.add_argument("--pipeline-version", type=str, default=os.getenv("PIPELINE_VERSION", None))
+    ap.add_argument("--pipeline-version", type=str, default="20250830_0ea85115e3753456bd2a66ed22cfe14736b879b7")
     ap.add_argument("--vocab-mode", type=str, default="global")          # 先支援 global
     ap.add_argument("--top-n", type=str, default="100")                  # 可給 "100,200"
-    ap.add_argument("--algorithms", type=str, default="xgboost,svm")     # 逗號分隔
-    ap.add_argument("--fs-methods", type=str, default="no_fs,lgbm_fs")
+    ap.add_argument("--algorithms", type=str, default="xgboost")     # 逗號分隔
+    ap.add_argument("--fs-methods", type=str, default="no_fs")
     ap.add_argument("--cv", type=int, default=10)
     ap.add_argument("--exclude-products", type=str, default="8918452")   # 逗號分隔
     ap.add_argument("--keyword", type=str, default=None)                 # single_keyword 用
-    ap.add_argument("--outdir", type=str, default="Model/outputs")
-    ap.add_argument("--oversample", type=str, default="none",
+    ap.add_argument("--outdir", type=str, default="Model/embeddings/train_output")
+    ap.add_argument("--oversample", type=str, default="smote",
                 choices=["none", "random", "smote", "xgb_scale_pos_weight"],
                 help="類別不平衡處理：none/random/smote/xgb_scale_pos_weight（僅作用於訓練折）")
     
     # 新增 embedding 參數
-    ap.add_argument("--embed-path", type=str, required=True,
+    ap.add_argument("--embed-path", type=str, default="Model/embeddings/outputs/084a2200-b325-4fcc-82df-b2cdf987cd81",
                     help="Embedding 檔案所在資料夾路徑")
-    ap.add_argument("--embed-mode", type=str, default="append",
+    ap.add_argument("--embed-mode", type=str, default="only",
                     choices=["append", "only"],
                     help="Embedding 整合模式：append(Dense+TF-IDF+Embed) / only(Dense+Embed)")
     ap.add_argument("--embed-scale", type=str, default="none",
@@ -105,6 +105,7 @@ def parse_args():
     ap.add_argument("--embed-dtype", type=str, default="float32",
                     choices=["float32", "float64"],
                     help="Embedding 資料型別")
+    # --mode product_level --date-cutoff 2025-06-25 --exclude-products 8918452 --pipeline-version 20250830_0ea85115e3753456bd2a66ed22cfe14736b879b7 --algorithms xgboost --fs-methods no_fs --outdir Model/embeddings/train_output --embed-path Model/embeddings/outputs/084a2200-b325-4fcc-82df-b2cdf987cd81 --embed-mode only --oversample smote
     
     return ap.parse_args()
 

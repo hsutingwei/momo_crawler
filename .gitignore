@@ -35,3 +35,5 @@ preprocess_v3
 /Model/embeddings/train_output
 /Model/embeddings/analysis_outputs
 /Model/findbest
+/config/cache
+/Model/outputs_v1
