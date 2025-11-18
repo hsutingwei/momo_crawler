@@ -109,6 +109,13 @@ def parse_args():
                     help="y=1 的條件：銷售增量比例閾值（可選，需同時滿足 delta 和 ratio）")
     ap.add_argument("--label-max-gap-days", type=float, default=14.0,
                     help="標籤定義：sales snapshot 之間的最大間隔天數（天）")
+    ap.add_argument("--label-mode", type=str, default="next_batch",
+                    choices=["next_batch", "fixed_window"],
+                    help="?????next_batch / fixed_window")
+    ap.add_argument("--label-window-days", type=float, default=7.0,
+                    help="fixed_window ?????? (?)")
+    ap.add_argument("--align-max-gap-days", type=float, default=None,
+                    help="????? snapshot ???????? (?)")
     ap.add_argument("--min-comments", type=int, default=0,
                     help="資料篩選：時間窗口內至少需要 N 條評論的商品才會被納入訓練")
     ap.add_argument("--keyword-blacklist", type=str, default=None,
@@ -841,7 +848,10 @@ def main():
         "definition": "delta_abs",
         "delta_threshold": args.label_delta_threshold,
         "ratio_threshold": args.label_ratio_threshold,
-        "max_gap_days": args.label_max_gap_days
+        "max_gap_days": args.label_max_gap_days,
+        "mode": args.label_mode,
+        "window_days": args.label_window_days,
+        "align_max_gap_days": args.align_max_gap_days
     }
     sampling_config = {
         "min_comments": args.min_comments,
@@ -872,6 +882,9 @@ def main():
             label_delta_threshold=args.label_delta_threshold,
             label_ratio_threshold=args.label_ratio_threshold,
             label_max_gap_days=args.label_max_gap_days,
+            label_mode=args.label_mode,
+            label_window_days=args.label_window_days,
+            align_max_gap_days=args.align_max_gap_days,
             min_comments=args.min_comments,
             keyword_whitelist=args.keyword_whitelist,
             keyword_blacklist=args.keyword_blacklist

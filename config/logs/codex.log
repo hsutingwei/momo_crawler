@@ -153,3 +153,274 @@ PermissionError: [Errno 13] Permission denied
 2025-11-15 00:00:07 | INFO     | Optimized database in a moment.
 2025-11-15 00:00:07 | INFO     | Backed up database to C:\YvesProject\中央\線上評論\momo_crawler-main\config\backups\codex.sqlite3.bak
 2025-11-15 00:00:07 | INFO     | Backed up database in a moment.
+2025-11-16 00:00:04 | SUCCESS  | Database passed foreign key check.
+2025-11-16 00:00:04 | INFO     | Checked integrtity of database foreign keys in a moment.
+2025-11-16 00:00:04 | SUCCESS  | Database passed integrity check.
+2025-11-16 00:00:04 | INFO     | Checked integrity of entire database in a moment.
+2025-11-16 00:00:04 | SUCCESS  | Full Text Search Index passed integrity check.
+2025-11-16 00:00:04 | INFO     | Checked integrity of full text virtual table in a moment.
+2025-11-16 00:00:05 | INFO     | Looking for search entries to update since the fracturing of the multiverse...
+2025-11-16 00:00:05 | INFO     | Looking for missing search entries to create...
+2025-11-16 00:00:05 | INFO     | Saved new latest codex version 1.8.17.
+2025-11-16 00:00:05 | SUCCESS  | Search index found to be already synced in a moment.
+2025-11-16 00:00:05 | ERROR    | Finish status {'JLV': JanitorCodexLatestVersionStatus(complete=None, total=None, since_updated=1763222404.5645301, subtitle='', start_time=1763222404.5351517, log_success=False)}
+Traceback (most recent call last):
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\threading.py", line 966, in _bootstrap
+    self._bootstrap_inner()
+    │    └ <function Thread._bootstrap_inner at 0x00000254D3611360>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\threading.py", line 1009, in _bootstrap_inner
+    self.run()
+    │    └ <function QueuedThread.run at 0x00000254D9F8C3A0>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\threads.py", line 81, in run
+    self._check_item()
+    │    └ <function QueuedThread._check_item at 0x00000254D9F8C310>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\threads.py", line 70, in _check_item
+    self.process_item(item)
+    │    │            └ CodexLatestVersionTask(force=False)
+    │    └ <function AggregateMessageQueuedThread.process_item at 0x00000254D9F8C8B0>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\threads.py", line 140, in process_item
+    self.aggregate_items(item)
+    │    │               └ CodexLatestVersionTask(force=False)
+    │    └ <function BookmarkThread.aggregate_items at 0x00000254D9F8CD30>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\bookmark\bookmarkd.py", line 93, in aggregate_items
+    self._process_task_immediately(task)
+    │    │                         └ CodexLatestVersionTask(force=False)
+    │    └ <function BookmarkThread._process_task_immediately at 0x00000254D9F8CC10>
+    └ <BookmarkThread(BookmarkThread, started daemon 13984)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\bookmark\bookmarkd.py", line 73, in _process_task_immediately
+    worker.update_latest_version(force=task.force)
+    │      │                           │    └ False
+    │      │                           └ CodexLatestVersionTask(force=False)
+    │      └ <function CodexLatestVersionUpdater.update_latest_version at 0x00000254D9C2C3A0>
+    └ <codex.librarian.bookmark.latest_version.CodexLatestVersionUpdater object at 0x00000254FFB29F30>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\bookmark\latest_version.py", line 61, in update_latest_version
+    self.status_controller.finish(status)
+    │    │                 │      └ JanitorCodexLatestVersionStatus(complete=None, total=None, since_updated=1763222404.5645301, subtitle='', start_time=17632224...
+    │    │                 └ <function StatusController.finish at 0x00000254D9C1FEB0>
+    │    └ <codex.librarian.status_controller.StatusController object at 0x00000254FFB2BE80>
+    └ <codex.librarian.bookmark.latest_version.CodexLatestVersionUpdater object at 0x00000254FFB29F30>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 200, in finish
+    self.finish_many((status,), notify=notify, clear_subtitle=clear_subtitle)
+    │    │            │                │                      └ True
+    │    │            │                └ True
+    │    │            └ JanitorCodexLatestVersionStatus(complete=None, total=None, since_updated=1763222404.5645301, subtitle='', start_time=17632224...
+    │    └ <function StatusController.finish_many at 0x00000254D9C1FE20>
+    └ <codex.librarian.status_controller.StatusController object at 0x00000254FFB2BE80>
+
+> File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 183, in finish_many
+    update_ls, log_statii = self._finish_status_prepare(
+                            │    └ <staticmethod(<function StatusController._finish_status_prepare at 0x00000254D9C1FD00>)>
+                            └ <codex.librarian.status_controller.StatusController object at 0x00000254FFB2BE80>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 128, in _finish_status_prepare
+    for ls in lses.iterator():
+              │    └ <function QuerySet.iterator at 0x00000254D60D0790>
+              └ <GroupByQuerySet [<LibrarianStatus: LibrarianStatus object (36)>]>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\db\models\query.py", line 504, in _iterator
+    yield from iterable
+               └ <django.db.models.query.ModelIterable object at 0x00000254FFB2BEB0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\db\models\query.py", line 93, in __iter__
+    results = compiler.execute_sql(
+              │        └ <function SQLCompiler.execute_sql at 0x00000254D88A1510>
+              └ <GroupBySQLCompiler model=LibrarianStatus connection=<DatabaseWrapper vendor='sqlite' alias='default'> using='default'>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 38, in inner
+    return original(compiler, *args, **kwargs)
+           │        │          │       └ {'chunked_fetch': True, 'chunk_size': 2000}
+           │        │          └ ()
+           │        └ <GroupBySQLCompiler model=LibrarianStatus connection=<DatabaseWrapper vendor='sqlite' alias='default'> using='default'>
+           └ <function _patch_compiler.<locals>.inner at 0x00000254D88272E0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 101, in inner
+    return _get_result_or_execute_query(
+           └ <function _get_result_or_execute_query at 0x00000254D88A1CF0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 47, in _get_result_or_execute_query
+    data = cache.get_many(table_cache_keys + [cache_key])
+           │     │        │                   └ 'b0be9040d5dc05bc43ae615d9ac400986a2b8042'
+           │     │        └ ['144147654822008ff613fd267cd471a4576cdbbf']
+           │     └ <function BaseCache.get_many at 0x00000254D5D5B490>
+           └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFAD5150>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\core\cache\backends\base.py", line 204, in get_many
+    val = self.get(k, self._missing_key, version=version)
+          │    │   │  │    │                     └ None
+          │    │   │  │    └ <object object at 0x00000254D32C56C0>
+          │    │   │  └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFAD5150>
+          │    │   └ '144147654822008ff613fd267cd471a4576cdbbf'
+          │    └ <function FileBasedCache.get at 0x00000254D5D7A710>
+          └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFAD5150>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\core\cache\backends\filebased.py", line 37, in get
+    return pickle.loads(zlib.decompress(f.read()))
+           │      │     │    │          │ └ <method 'read' of '_io.BufferedReader' objects>
+           │      │     │    │          └ <_io.BufferedReader name='C:\\YvesProject\\中央\\線上評論\\momo_crawler-main\\config\\cache\\default\\dcf28c81179f6d2f4afd5fcf9a6d0...
+           │      │     │    └ <built-in function decompress>
+           │      │     └ <module 'zlib' (built-in)>
+           │      └ <built-in function loads>
+           └ <module 'pickle' from 'C:\\Users\\Yves\\AppData\\Local\\Programs\\Python\\Python310\\lib\\pickle.py'>
+
+PermissionError: [Errno 13] Permission denied
+2025-11-16 00:00:05 | INFO     | Optimized search virtual table in a moment.
+2025-11-16 00:00:05 | INFO     | Vacuumed database. Saved 0 Bytes.
+2025-11-16 00:00:05 | INFO     | Optimized database in a moment.
+2025-11-16 00:00:05 | INFO     | Backed up database to C:\YvesProject\中央\線上評論\momo_crawler-main\config\backups\codex.sqlite3.bak
+2025-11-16 00:00:05 | INFO     | Backed up database in a moment.
+2025-11-17 00:00:05 | SUCCESS  | Database passed foreign key check.
+2025-11-17 00:00:05 | INFO     | Checked integrtity of database foreign keys in a moment.
+2025-11-17 00:00:05 | SUCCESS  | Database passed integrity check.
+2025-11-17 00:00:05 | INFO     | Checked integrity of entire database in a moment.
+2025-11-17 00:00:05 | SUCCESS  | Full Text Search Index passed integrity check.
+2025-11-17 00:00:05 | INFO     | Checked integrity of full text virtual table in a moment.
+2025-11-17 00:00:05 | INFO     | Saved new latest codex version 1.8.17.
+2025-11-17 00:00:05 | INFO     | Checked Codex latest version in a moment.
+2025-11-17 00:00:05 | INFO     | Looking for search entries to update since the fracturing of the multiverse...
+2025-11-17 00:00:05 | INFO     | Looking for missing search entries to create...
+2025-11-17 00:00:05 | SUCCESS  | Search index found to be already synced in a moment.
+2025-11-17 00:00:06 | INFO     | Optimized search virtual table in a moment.
+2025-11-17 00:00:06 | INFO     | Vacuumed database. Saved 0 Bytes.
+2025-11-17 00:00:06 | INFO     | Optimized database in a moment.
+2025-11-17 00:00:06 | INFO     | Backed up database to C:\YvesProject\中央\線上評論\momo_crawler-main\config\backups\codex.sqlite3.bak
+2025-11-17 00:00:06 | INFO     | Backed up database in a moment.
+2025-11-18 00:00:05 | SUCCESS  | Database passed foreign key check.
+2025-11-18 00:00:05 | INFO     | Checked integrtity of database foreign keys in a moment.
+2025-11-18 00:00:05 | SUCCESS  | Database passed integrity check.
+2025-11-18 00:00:05 | ERROR    | Finish status {'JID': JanitorDBIntegrityStatus(complete=None, total=None, since_updated=1763395205.4613366, subtitle='', start_time=1763395205.4513347, log_success=False)}
+Traceback (most recent call last):
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\threading.py", line 966, in _bootstrap
+    self._bootstrap_inner()
+    │    └ <function Thread._bootstrap_inner at 0x00000254D3611360>
+    └ <ScribeThread(ScribeThread, started daemon 16808)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\threading.py", line 1009, in _bootstrap_inner
+    self.run()
+    │    └ <function QueuedThread.run at 0x00000254D9F8C3A0>
+    └ <ScribeThread(ScribeThread, started daemon 16808)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\threads.py", line 81, in run
+    self._check_item()
+    │    └ <function QueuedThread._check_item at 0x00000254D9F8C310>
+    └ <ScribeThread(ScribeThread, started daemon 16808)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\threads.py", line 70, in _check_item
+    self.process_item(item)
+    │    │            └ ((6, 1763395205.305514), JanitorIntegrityCheckTask(long=True))
+    │    └ <function ScribeThread.process_item at 0x00000254FF9F6B90>
+    └ <ScribeThread(ScribeThread, started daemon 16808)>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\scribe\scribed.py", line 97, in process_item
+    worker.handle_task(task)
+    │      │           └ JanitorIntegrityCheckTask(long=True)
+    │      └ <function Janitor.handle_task at 0x00000254FF9F69E0>
+    └ <codex.librarian.scribe.janitor.janitor.Janitor object at 0x00000254FFA4F9A0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\scribe\janitor\janitor.py", line 121, in handle_task
+    self.integrity_check(long=task.long)
+    │    │                    │    └ True
+    │    │                    └ JanitorIntegrityCheckTask(long=True)
+    │    └ <function JanitorIntegrity.integrity_check at 0x00000254FF9F57E0>
+    └ <codex.librarian.scribe.janitor.janitor.Janitor object at 0x00000254FFA4F9A0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\scribe\janitor\integrity.py", line 348, in integrity_check
+    self.status_controller.finish(status)
+    │    │                 │      └ JanitorDBIntegrityStatus(complete=None, total=None, since_updated=1763395205.4613366, subtitle='', start_time=1763395205.4513...
+    │    │                 └ <function StatusController.finish at 0x00000254D9C1FEB0>
+    │    └ <codex.librarian.status_controller.StatusController object at 0x00000254FFCF1540>
+    └ <codex.librarian.scribe.janitor.janitor.Janitor object at 0x00000254FFA4F9A0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 200, in finish
+    self.finish_many((status,), notify=notify, clear_subtitle=clear_subtitle)
+    │    │            │                │                      └ True
+    │    │            │                └ True
+    │    │            └ JanitorDBIntegrityStatus(complete=None, total=None, since_updated=1763395205.4613366, subtitle='', start_time=1763395205.4513...
+    │    └ <function StatusController.finish_many at 0x00000254D9C1FE20>
+    └ <codex.librarian.status_controller.StatusController object at 0x00000254FFCF1540>
+
+> File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 183, in finish_many
+    update_ls, log_statii = self._finish_status_prepare(
+                            │    └ <staticmethod(<function StatusController._finish_status_prepare at 0x00000254D9C1FD00>)>
+                            └ <codex.librarian.status_controller.StatusController object at 0x00000254FFCF1540>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\codex\librarian\status_controller.py", line 128, in _finish_status_prepare
+    for ls in lses.iterator():
+              │    └ <function QuerySet.iterator at 0x00000254D60D0790>
+              └ <GroupByQuerySet [<LibrarianStatus: LibrarianStatus object (33)>]>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\db\models\query.py", line 504, in _iterator
+    yield from iterable
+               └ <django.db.models.query.ModelIterable object at 0x00000254FFD10AF0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\db\models\query.py", line 93, in __iter__
+    results = compiler.execute_sql(
+              │        └ <function SQLCompiler.execute_sql at 0x00000254D88A1510>
+              └ <GroupBySQLCompiler model=LibrarianStatus connection=<DatabaseWrapper vendor='sqlite' alias='default'> using='default'>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 38, in inner
+    return original(compiler, *args, **kwargs)
+           │        │          │       └ {'chunked_fetch': True, 'chunk_size': 2000}
+           │        │          └ ()
+           │        └ <GroupBySQLCompiler model=LibrarianStatus connection=<DatabaseWrapper vendor='sqlite' alias='default'> using='default'>
+           └ <function _patch_compiler.<locals>.inner at 0x00000254D88272E0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 101, in inner
+    return _get_result_or_execute_query(
+           └ <function _get_result_or_execute_query at 0x00000254D88A1CF0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\cachalot\monkey_patch.py", line 47, in _get_result_or_execute_query
+    data = cache.get_many(table_cache_keys + [cache_key])
+           │     │        │                   └ '1c293500e69079be0347770edc25a2122e1844f3'
+           │     │        └ ['144147654822008ff613fd267cd471a4576cdbbf']
+           │     └ <function BaseCache.get_many at 0x00000254D5D5B490>
+           └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFA944C0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\core\cache\backends\base.py", line 204, in get_many
+    val = self.get(k, self._missing_key, version=version)
+          │    │   │  │    │                     └ None
+          │    │   │  │    └ <object object at 0x00000254D32C56C0>
+          │    │   │  └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFA944C0>
+          │    │   └ '144147654822008ff613fd267cd471a4576cdbbf'
+          │    └ <function FileBasedCache.get at 0x00000254D5D7A710>
+          └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFA944C0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\core\cache\backends\filebased.py", line 36, in get
+    if not self._is_expired(f):
+           │    │           └ <_io.BufferedReader name='C:\\YvesProject\\中央\\線上評論\\momo_crawler-main\\config\\cache\\default\\dcf28c81179f6d2f4afd5fcf9a6d0...
+           │    └ <function FileBasedCache._is_expired at 0x00000254D5D7AD40>
+           └ <django.core.cache.backends.filebased.FileBasedCache object at 0x00000254FFA944C0>
+
+  File "C:\Users\Yves\AppData\Local\Programs\Python\Python310\lib\site-packages\django\core\cache\backends\filebased.py", line 154, in _is_expired
+    exp = pickle.load(f)
+          │      │    └ <_io.BufferedReader name='C:\\YvesProject\\中央\\線上評論\\momo_crawler-main\\config\\cache\\default\\dcf28c81179f6d2f4afd5fcf9a6d0...
+          │      └ <built-in function load>
+          └ <module 'pickle' from 'C:\\Users\\Yves\\AppData\\Local\\Programs\\Python\\Python310\\lib\\pickle.py'>
+
+PermissionError: [Errno 13] Permission denied
+2025-11-18 00:00:05 | SUCCESS  | Full Text Search Index passed integrity check.
+2025-11-18 00:00:05 | INFO     | Checked integrity of full text virtual table in a moment.
+2025-11-18 00:00:06 | INFO     | Looking for search entries to update since the fracturing of the multiverse...
+2025-11-18 00:00:06 | INFO     | Looking for missing search entries to create...
+2025-11-18 00:00:06 | SUCCESS  | Search index found to be already synced in a moment.
+2025-11-18 00:00:06 | INFO     | Optimized search virtual table in a moment.
+2025-11-18 00:00:06 | INFO     | Vacuumed database. Saved 0 Bytes.
+2025-11-18 00:00:06 | INFO     | Optimized database in a moment.
+2025-11-18 00:00:06 | INFO     | Backed up database to C:\YvesProject\中央\線上評論\momo_crawler-main\config\backups\codex.sqlite3.bak
+2025-11-18 00:00:06 | INFO     | Backed up database in a moment.
+2025-11-18 00:00:07 | INFO     | Saved new latest codex version 1.8.17.
+2025-11-18 00:00:07 | INFO     | Checked Codex latest version in 2 seconds.

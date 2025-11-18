@@ -18,24 +18,33 @@
 
 ---
 
-## 2. `Model/data_loader.py`：參數與流程細節
+## 2. `Model/data_loader.py`：標記模式與流程細節
 
-### 2.1 新增參數用途
+### 2.1 標記模式（`label_mode`）
+
+- `next_batch`（v1 預設）：以「評論批次」為時間軸，對齊最近且不晚於該批次的 sales snapshot，並檢查「下一個批次」是否上升。為了模擬「cutoff 之後的未來」，`batch_time > cutoff` 的批次才會計算 y=1。  
+- `fixed_window`（Phase 2 追加）：不再依賴「下一個批次」，改為每個批次都用固定時間窗 `[t, t + label_window_days]` 搜尋 sales snapshot，只要在這個窗口內找到滿足 delta/ratio 的上升就標記為 y=1。這種做法讓不同商品的時間尺度一致，也不必強制依靠 `batch_time > cutoff` 來定義「未來」。
+
+### 2.2 新增參數用途
 
 | 參數 | 功能 |
 | --- | --- |
 | `label_delta_threshold` | 下一個批次銷售量需增加的絕對值門檻。 |
 | `label_ratio_threshold` | 若設定，需同時達到指定百分比的相對增幅。 |
-| `label_max_gap_days` | 限制 snapshot 與評論批次的最大允許時間差。 |
+| `label_mode` | `next_batch` / `fixed_window`。 |
+| `label_window_days` | `fixed_window` 模式下，往後搜尋 snapshot 的窗口長度（天）。 |
+| `label_max_gap_days` | `next_batch` 模式下，允許 snapshot 與批次的最大時間差；`fixed_window` 模式用於限制「過舊」的參考 snapshot。 |
+| `align_max_gap_days` | 對齊上一筆 snapshot 時可允許的最大差距；可避免把太久以前的 snapshot 當作參考值。 |
 | `min_comments` | 保留在 cutoff 前至少 N 筆評論的商品。 |
 | `keyword_whitelist` / `keyword_blacklist` | 只使用（或排除）特定 keyword 的商品群。 |
 
-### 2.2 單一商品的標記流程（pseudo）
+### 2.3 單一商品的標記流程（pseudo）
 
 1. 取得該商品的所有 `comment_batches`（distinct `capture_time`）。
 2. 找出每個批次對應的 `sales_snapshots`：只取 snapshot_time ≤ 該批次時間，並選擇最近的一筆（`batch_repr`）。
 3. 在 `seq` 中計算 `prev_sales`（上一批的銷售級距）。
-4. y=1 條件（以 v1 預設為例）：
+4. y=1 條件：
+   - `next_batch`（v1 預設）：
    ```sql
    CASE WHEN batch_time > cutoff
           AND prev_sales IS NOT NULL
@@ -50,6 +59,7 @@
               )
         THEN 1 ELSE 0
    ```
+   - `fixed_window`（Phase 2）：對每個 `batch_time = t`，先取得最近的 `prev_sales`（若與 t 差距大於 `align_max_gap_days` 則捨棄），再搜尋 `t < snapshot_time ≤ t + label_window_days` 的快照，只要在窗口內存在 `(sales_count - prev_sales) ≥ delta`（及 ratio 條件）即標記 1，否則 0。可視需求決定是否保留 `batch_time > cutoff` 限制。
 5. 將結果 merge 回 dense 表；在 pandas 端依 `keyword_*`/`min_comments` 做最後篩選。
 6. 以 `fetch_top_terms` 取得 vocab，並從 `tfidf_scores` 建立 `X_tfidf`。
 7. 回傳 `(X_dense_df, X_tfidf, y, meta, vocab)` 給訓練流程。

@@ -252,42 +252,47 @@ def load_product_level_training_set(
     date_cutoff: str = "2025-06-25",
     top_n: int = 100,
     pipeline_version: Optional[str] = None,
-    vocab_mode: str = "global",          # ?????? 'global'??? 'per_keyword' / 'single_keyword'
+    vocab_mode: str = "global",
     single_keyword: Optional[str] = None,
     exclude_products: Optional[List[int]] = None,
     label_delta_threshold: float = 1.0,
     label_ratio_threshold: Optional[float] = None,
     label_max_gap_days: Optional[float] = None,
+    label_mode: str = "next_batch",
+    label_window_days: float = 7.0,
+    align_max_gap_days: Optional[float] = None,
     min_comments: int = 0,
     keyword_whitelist: Optional[List[str]] = None,
     keyword_blacklist: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
     """
-    回傳 (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
+    ?? (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
 
-    - 一筆資料 = 一個 product_id
-    - Dense 特徵：cutoff(含) 以前彙總（含你新增的三欄）
-    - y: cutoff(後) 是否曾出現銷售數量「增加」(prev -> curr)
-    - TF vocab：以 cutoff(含) 以前的所有評論取 global Top-N；商品 TF 指標=是否曾出現該 token(1/0)
+    - ? product_id ???????
+    - label_mode: next_batch / fixed_window
     """
     exclude_products = exclude_products or []
     conn = get_connection()
     try:
+        align_gap_seconds = (align_max_gap_days * 86400.0) if align_max_gap_days else None
         params = {
             "cutoff": date_cutoff,
             "excluded": exclude_products if exclude_products else [-1],
             "single_kw": single_keyword,
             "delta_threshold": label_delta_threshold,
             "ratio_threshold": label_ratio_threshold,
-            "max_gap_seconds": (label_max_gap_days * 86400.0) if label_max_gap_days else None
+            "max_gap_seconds": (label_max_gap_days * 86400.0) if label_max_gap_days else None,
+            "label_window_days": label_window_days,
+            "align_gap_seconds": align_gap_seconds
         }
-
-        # 1) 對齊序列 & y（post-cutoff 是否曾增加）
-        sql_y = """
+        label_mode = (label_mode or "next_batch").lower()
+        if label_mode == "next_batch":
+            sql_y = """
         WITH comment_batches AS (
           SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
           FROM product_comments pc
           JOIN products p ON p.id = pc.product_id
+          WHERE (%(single_kw)s IS NULL OR p.keyword = %(single_kw)s)
           GROUP BY p.keyword, pc.product_id, pc.capture_time
         ),
         snap_mapped AS (
@@ -305,6 +310,8 @@ def load_product_level_training_set(
             WHERE cb.keyword = p.keyword
               AND cb.product_id = s.product_id
               AND cb.batch_time <= s.capture_time
+              AND (%(align_gap_seconds)s IS NULL
+                   OR s.capture_time >= cb.batch_time - INTERVAL '1 second' * %(align_gap_seconds)s)
             ORDER BY cb.batch_time DESC
             LIMIT 1
           ) AS cb_near ON TRUE
@@ -364,12 +371,80 @@ def load_product_level_training_set(
         FROM y_post
         WHERE product_id <> ALL(%(excluded)s)
         """
+        elif label_mode == "fixed_window":
+            sql_y = """
+        WITH comment_batches AS (
+          SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
+          FROM product_comments pc
+          JOIN products p ON p.id = pc.product_id
+          WHERE pc.capture_time <= %(cutoff)s::timestamp
+            AND (%(single_kw)s IS NULL OR p.keyword = %(single_kw)s)
+          GROUP BY p.keyword, pc.product_id, pc.capture_time
+        ),
+        prev_snap AS (
+          SELECT
+            cb.product_id,
+            cb.batch_time,
+            ps.snapshot_time AS prev_snapshot_time,
+            ps.sales_count AS prev_sales
+          FROM comment_batches cb
+          LEFT JOIN LATERAL (
+            SELECT s.capture_time AS snapshot_time, s.sales_count
+            FROM sales_snapshots s
+            WHERE s.product_id = cb.product_id
+              AND s.capture_time <= cb.batch_time
+              AND (%(align_gap_seconds)s IS NULL
+                   OR s.capture_time >= cb.batch_time - INTERVAL '1 second' * %(align_gap_seconds)s)
+            ORDER BY s.capture_time DESC
+            LIMIT 1
+          ) ps ON TRUE
+        ),
+        future_snap AS (
+          SELECT
+            cb.product_id,
+            cb.batch_time,
+            cb.prev_sales,
+            MAX(s.sales_count) AS future_max_sales
+          FROM prev_snap cb
+          LEFT JOIN sales_snapshots s
+            ON s.product_id = cb.product_id
+           AND s.capture_time > cb.batch_time
+           AND s.capture_time <= cb.batch_time + INTERVAL '1 day' * %(label_window_days)s
+          GROUP BY cb.product_id, cb.batch_time, cb.prev_sales
+        ),
+        y_post AS (
+          SELECT
+            cb.product_id,
+            MAX(
+              CASE
+                WHEN cb.prev_sales IS NULL THEN 0
+                WHEN fs.future_max_sales IS NULL THEN 0
+                WHEN (fs.future_max_sales - cb.prev_sales) >= %(delta_threshold)s
+                     AND (
+                          %(ratio_threshold)s IS NULL
+                          OR cb.prev_sales = 0
+                          OR ((fs.future_max_sales::float / NULLIF(cb.prev_sales, 0)) - 1) >= %(ratio_threshold)s
+                     )
+                THEN 1 ELSE 0
+              END
+            ) AS y
+          FROM prev_snap cb
+          LEFT JOIN future_snap fs
+            ON fs.product_id = cb.product_id
+           AND fs.batch_time = cb.batch_time
+          GROUP BY cb.product_id
+        )
+        SELECT product_id, y
+        FROM y_post
+        WHERE product_id <> ALL(%(excluded)s)
+        """
+        else:
+            raise ValueError(f"Unsupported label_mode: {label_mode}")
+
         y_df = pd.read_sql(sql_y, conn, params=params)
         if y_df.empty:
-            # 沒資料也要保底空結構
             y_df = pd.DataFrame(columns=["product_id", "y"])
 
-        # 2) Dense 特徵（cutoff 以前）
         sql_dense = """
         WITH pre_comments AS (
           SELECT pc.*, p.name, p.price::float AS price, p.keyword
@@ -403,7 +478,6 @@ def load_product_level_training_set(
           GROUP BY product_id
         ),
         pre_seq AS (
-          -- 對齊後的 pre-cutoff 序列，計算 pre 的變化/增加次數
           WITH comment_batches AS (
             SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
             FROM product_comments pc
@@ -488,11 +562,9 @@ def load_product_level_training_set(
         """
         dense = pd.read_sql(sql_dense, conn, params=params)
 
-        # 3) y merge（沒 y 的補 0）
         df = dense.merge(y_df, on="product_id", how="left")
         df["y"] = df["y"].fillna(0).astype(int)
 
-        # 3.5) Sampling filters
         if keyword_whitelist:
             df = df[df["keyword"].isin(keyword_whitelist)]
         if keyword_blacklist:
@@ -500,14 +572,12 @@ def load_product_level_training_set(
         if min_comments > 0 and "comment_count_pre" in df.columns:
             df = df[df["comment_count_pre"] >= min_comments]
 
-        # 4) TF vocab（global, cutoff 以前）
         vocab = fetch_top_terms(conn,
                                 top_n=top_n,
                                 pipeline_version=pipeline_version,
                                 product_id=None,
                                 min_len=2, max_len=4)
 
-        # 5) 取 (product_id, token) 對：商品在 cutoff 前是否「曾出現」該 token
         if vocab:
             sql_pairs = """
             WITH vocab AS (
@@ -526,8 +596,6 @@ def load_product_level_training_set(
         else:
             pairs = pd.DataFrame(columns=["product_id", "token"])
 
-        # 6) build sparse matrix (row=product_id)
-        # 先確保 meta row order
         meta = df[["product_id", "name", "keyword"]].copy()
         id_index = pd.Series(range(len(meta)), index=meta["product_id"])
         if pairs.empty or not vocab:
@@ -544,9 +612,8 @@ def load_product_level_training_set(
             X_tfidf = coo_matrix((data, (rows, cols)),
                                  shape=(len(meta), len(vocab)), dtype=np.int8).tocsr()
 
-        # 7) Dense features
         dense_cols = [
-            "price", 
+            "price",
             "has_image_urls", "image_urls_count", "has_video_url",
             "has_reply_content", "score_mean", "like_count_sum",
             "had_any_change_pre", "num_increases_pre", "comment_count_pre"
@@ -558,7 +625,6 @@ def load_product_level_training_set(
 
         y = df["y"].astype(int)
 
-        # 8) meta 增補 is_train（K 折會用不到，但保留欄位一致性）
         meta["is_train"] = True
 
         return X_dense, X_tfidf, y, meta, vocab
