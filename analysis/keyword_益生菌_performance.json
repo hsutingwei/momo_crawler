@@ -1,0 +1,20 @@
+{
+  "keyword": "益生菌",
+  "n_samples": 306,
+  "n_pos": 27,
+  "n_neg": 279,
+  "pos_rate": 0.08823529411764706,
+  "precision_1_05": 0.0,
+  "recall_1_05": 0.0,
+  "f1_1_05": 0.0,
+  "best_threshold": 0.05,
+  "chosen_for": "f1_1",
+  "precision_1_best": 0.18421052631578946,
+  "recall_1_best": 0.25925925925925924,
+  "f1_1_best": 0.2153846153846154,
+  "top20_tp": 4,
+  "top20_fp": 16,
+  "top20_tn": 0,
+  "top20_fn": 0,
+  "total_fn": 20
+}
