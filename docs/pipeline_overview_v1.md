@@ -153,4 +153,118 @@
 
 ---
 
+## 5. 實驗結果比較與 QA 檢查實例（Phase 3+）
+
+### 5.1 問題案例：eval set 沒有正類
+
+**舊 run (`run_20250625_global_top100_xgboost_no_fs_20251119-222709`)**：
+- 問題：eval set 只剩 1 筆 y=0，完全沒有 y=1
+- 結果：accuracy=1.0, f1_macro=1.0 看似很高，但其實實驗無效
+- 原因分析：
+  - 可能使用了過度過濾或時間區間太窄
+  - 或使用了不當的時間切分點，導致 eval set 沒有正類樣本
+
+**新 run (`fixed_window v2`, `run_20250625_global_top100_xgboost_no_fs_20251119-225342`)**：
+- 配置：fixed_window 模式 + time-based split，min_comments=5（較寬鬆）
+- 結果：
+  - 訓練集：n_train_0=2814, n_train_1=24, pos_rate=0.84%
+  - 測試集：n_test_0=9, n_test_1=0, pos_rate=0%
+  - **QA 檢查失敗**：`valid_for_evaluation = False`
+- 問題分析：
+  - 時間切分點設置不當：val_end_date=2025-06-25 之後的數據太少（只有 9 個樣本）
+  - 數據時間分布不均：大部分數據集中在 2025-04-28 到 2025-05-16，2025-06-25 之後的數據極少
+  - 2025-06-25 之後的樣本全部是 y=0，沒有正類
+- 改善建議：
+  - 調整時間切分點，使用更早的切分點（例如 train_end_date=2025-05-10, val_end_date=2025-05-20）
+  - 或改用 StratifiedKFold 進行交叉驗證，但保留 QA 檢查機制
+
+### 5.2 QA 檢查機制驗證
+
+新 run 成功觸發了 QA 檢查機制：
+- 自動檢測到 test set 沒有正類樣本（n_test_1=0 < 10）
+- 標記 `valid_for_evaluation = False`
+- 將 metrics 設為 null，避免誤認為有效結果
+- 在 log 中明確輸出警告訊息，包含詳細的 class 分布資訊
+
+這證明了 QA 檢查機制的有效性，能夠及時發現並標記無效實驗。
+
+### 5.3 與舊 run 的對比
+
+| 項目 | 舊 run (next_batch, StratifiedKFold) | 新 run v1 (fixed_window, time-based) | 新 run v2 (fixed_window, StratifiedKFold) | 新 run v3 (next_batch, StratifiedKFold + QA) |
+| --- | --- | --- | --- | --- |
+| label_mode | next_batch | fixed_window | fixed_window | next_batch |
+| 切分方式 | StratifiedKFold (10 折) | Time-based split | StratifiedKFold (10 折) | StratifiedKFold (10 折) |
+| 總樣本數 | 約 6773 | 2847 | 2847 | 約 6773 |
+| 正類總數 | 約 423 | 24 | 24 | 約 423 |
+| 正類比例 | 約 6.2% | 0.84% | 0.84% | 約 6.2% |
+| 訓練集樣本 | 約 6096 (平均每折: 609.6) | 2838 | 約 2562 (平均每折) | 約 6096 (平均每折) |
+| 驗證集樣本 | 約 677 (平均每折) | 0 (val set 為空) | 約 285 (平均每折) | 約 677 (平均每折) |
+| 測試集樣本 | 約 677 (平均每折) | 9 | 約 285 (平均每折) | 約 677 (平均每折) |
+| 正類樣本 (eval) | 約 42.3 (平均每折) | 0 | 約 2.4 (平均每折) | 約 14.1 (平均每折) |
+| QA 檢查 | ❌ 無 | ✅ 有 | ✅ 有 | ✅ 有 |
+| valid_for_evaluation | ❌ 無此欄位 | ✅ False (正確標記) | ✅ False (正確標記) | ✅ True (通過檢查) |
+| 問題發現 | ❌ 事後才發現 | ✅ 訓練時即發現 | ✅ 訓練時即發現 | ✅ 無問題 |
+| 主要 metrics | PR-AUC≈0.109, F1≈0.142 | 無效（metrics=null） | 無效（metrics=null） | PR-AUC≈0.568, F1≈0.495 |
+
+**關鍵發現**：
+
+1. **舊 run (next_batch + StratifiedKFold)**：
+   - 正類比例較高（約 6.2%），每個 fold 有約 42.3 個正類樣本
+   - 沒有 QA 檢查機制，無法及時發現問題
+   - 如果某個 fold 剛好沒有正類，會導致 accuracy=1.0 的假神模型
+
+2. **新 run v1 (fixed_window + time-based split)**：
+   - 時間切分點設置不當（val_end_date=2025-06-25），導致 test set 沒有正類（0 個）
+   - 數據時間分布不均：大部分數據集中在 2025-04-28 到 2025-05-16，2025-06-25 之後的數據極少
+   - QA 檢查成功發現問題並標記為無效
+
+3. **新 run v2 (fixed_window + StratifiedKFold)**：
+   - 即使使用 StratifiedKFold，每個 fold 也只有約 2.4 個正類樣本，低於 QA 檢查門檻（10 個）
+   - QA 檢查成功發現問題並標記為無效
+   - 這證明了 QA 檢查機制的必要性
+
+**根本原因分析**：
+
+1. **label_mode 的差異**：
+   - `next_batch` 模式：正類比例約 6.2-7.7%，較容易滿足 QA 檢查要求
+   - `fixed_window` 模式：正類比例極低（24/2847 = 0.84%），遠低於 next_batch 模式
+   - 原因：fixed_window 模式的 label 定義更嚴格（需要 7 天內有顯著成長），導致正類樣本極少
+
+2. **切分方式的影響**：
+   - `StratifiedKFold`：可以保證每個 fold 的正類比例與整體一致，但當整體正類比例極低時，每個 fold 的正類樣本數仍可能不足
+   - `time-based split`：需要仔細選擇切分點，如果數據時間分布不均或切分點設置不當，可能導致某些 split 沒有正類
+
+3. **QA 檢查的重要性**：
+   - 當正類比例極低時，即使使用 StratifiedKFold，每個 fold 的正類樣本數也可能不足
+   - QA 檢查機制能夠及時發現並標記這類問題，避免將無效實驗誤認為有效結果
+
+**改善建議**：
+1. 對於 fixed_window 模式，可以考慮降低 QA 檢查門檻（例如 `--min-eval-pos-samples 3`），因為其正類比例本身就極低
+2. 或調整 label 定義，使用較寬鬆的條件（例如降低 `label_delta_threshold` 或 `label_ratio_threshold`），以提高正類比例
+3. 或使用 next_batch 模式，其正類比例較高（約 7.7%），更容易滿足 QA 檢查要求
+4. 在選擇切分方式時，需要考慮數據的時間分布和正類比例，選擇最適合的切分策略
+
+### 5.4 實驗配置建議
+
+基於以上分析，建議的實驗配置：
+
+**配置 A：next_batch 模式 + StratifiedKFold + QA 檢查（推薦用於 baseline）**
+- 正類比例較高（約 6.2-7.7%），容易滿足 QA 檢查
+- 使用 StratifiedKFold 進行交叉驗證
+- 啟用 QA 檢查機制，確保實驗有效性
+- 適合作為 baseline 實驗
+- **實測結果**：新 run v3 通過 QA 檢查（`valid_for_evaluation = True`），每個 fold 有約 14.1 個正類樣本（超過門檻 10 個），實驗有效
+
+**配置 B：fixed_window 模式 + StratifiedKFold + 降低 QA 門檻**
+- 使用 fixed_window 模式確保時間尺度一致
+- 使用 StratifiedKFold 進行交叉驗證
+- 降低 QA 檢查門檻（例如 `--min-eval-pos-samples 3`）以適應低正類比例
+
+**配置 C：fixed_window 模式 + time-based split（需謹慎選擇切分點）**
+- 使用 fixed_window 模式 + time-based split 真正模擬預測未來
+- 需要仔細選擇切分點，確保每個 split 都有足夠的正負類樣本
+- 建議先分析數據的時間分布，選擇合適的切分點
+
+---
+
 > **維護提醒**：往後只要調整資料定義、特徵或訓練流程，請同步更新此文件（尤其是參數/流程說明與 sweep 設定），確保研究者能清楚追蹤每次實驗的語意與流程。

@@ -127,3 +127,25 @@ python Model/train.py \
 
 1. **特徵擴充**：加入 rolling sales、評論密度、情緒分數等，觀察對 v1_main/v1_alt 的 F1/P@K 是否有持續提升。  
 2. **SOP 產出**：每次實驗需更新 `model_run_v1.json` 與本方法說明，讓 Dashboard/論文皆能追蹤到「標記與資料策略」。
+
+## 8. QA 檢查與實驗有效性驗證（Phase 3+）
+
+### 8.1 問題案例：假神模型
+
+在實驗過程中，我們曾經遇到「eval set 沒有任何 y=1，導致 accuracy=1.0 看似很高但其實實驗無效」的案例（例如 `run_20250625_global_top100_xgboost_no_fs_20251119-222709`）。這種情況可能發生在：
+
+- **time-based split 時時間區間太窄**：如果 `train_end_date` 和 `val_end_date` 太接近，或 `val_end_date` 之後的時間區間剛好沒有 y=1 的商品，會導致 eval set 沒有正類。
+- **過度過濾**：如果使用了過嚴格的過濾條件（例如 `min_comments` 太高、keyword 限制太嚴格），可能導致樣本太少，某些時間區間完全沒有正類。
+- **label 定義太嚴格**：如果 label 定義太嚴格（例如 `delta=12` 對低級距商品太嚴格），可能導致某些時間區間完全沒有 y=1。
+
+### 8.2 改善措施
+
+為防止這類問題，我們在 pipeline 中新增了以下機制：
+
+1. **Class 分布 QA 檢查**：在 train/val/test 切分完成後，自動檢查每個 eval set 的 class 分布。預設要求至少 10 個正類和 10 個負類樣本（可透過 `--min-eval-pos-samples` 和 `--min-eval-neg-samples` 調整）。
+
+2. **`valid_for_evaluation` 標記**：如果 QA 檢查失敗，會在 summary CSV 和 `model_run_v1.json` 中標記 `valid_for_evaluation = false`，並將主要 metrics 設為 null，避免將無效實驗誤認為有效結果。
+
+3. **新的實驗設定**：設計了 `fixed_window v2` 實驗配置（見 `experiments/run_fixedwindow_v2.py`），使用較寬鬆的過濾條件和足夠大的時間區間，確保 eval set 有足夠的正負類樣本。
+
+這些措施確保了實驗結果的有效性和可重現性，避免了「假神模型」的問題。

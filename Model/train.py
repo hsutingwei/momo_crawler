@@ -136,6 +136,10 @@ def parse_args():
                     help="選擇 threshold 時要優化的目標指標")
     ap.add_argument("--threshold-min-recall", type=float, default=0.0,
                     help="threshold search 時 recall(y=1) 的最低要求")
+    ap.add_argument("--min-eval-pos-samples", type=int, default=10,
+                    help="QA 檢查：eval set 中正類樣本的最低要求（預設 10）")
+    ap.add_argument("--min-eval-neg-samples", type=int, default=10,
+                    help="QA 檢查：eval set 中負類樣本的最低要求（預設 10）")
     return ap.parse_args()
 
 def std_scaler_to_sparse(Xdf: pd.DataFrame) -> csr_matrix:
@@ -492,7 +496,12 @@ def build_model_run_payload(run_id: str,
                             feature_blocks: Dict[str, Any],
                             metrics_v1: dict,
                             feature_importance: List[Dict[str, Any]],
-                            error_examples: Dict[str, Any]) -> dict:
+                            error_examples: Dict[str, Any],
+                            eval_valid: bool = True,
+                            n_train_0: int = 0,
+                            n_train_1: int = 0,
+                            n_test_0: int = 0,
+                            n_test_1: int = 0) -> dict:
     y_definition = f"next batch sales delta >= {args.label_delta_threshold}"
     if args.label_max_gap_days:
         y_definition += f" within {args.label_max_gap_days} days"
@@ -518,7 +527,14 @@ def build_model_run_payload(run_id: str,
             f"Time-based split (train≤{args.train_end_date}, val≤{args.val_end_date}, test>{args.val_end_date})"
             if (args.label_mode == "fixed_window" and args.train_end_date and args.val_end_date)
             else f"StratifiedKFold (n_splits={args.cv})"
-        )
+        ),
+            "qa_check": {
+                "valid_for_evaluation": eval_valid,
+                "n_train_0": n_train_0,
+                "n_train_1": n_train_1,
+                "n_test_0": n_test_0,
+                "n_test_1": n_test_1
+            }
         },
         "model_spec": {
             "algorithm": alg_name,
@@ -661,6 +677,12 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
             meta["representative_batch_time"] = meta["representative_batch_time"].dt.tz_localize("UTC")
         
         # 切分資料
+        # 【潛在問題點】time-based split 可能導致某些時間區間樣本極少或沒有正類
+        # 原因：
+        #   1. 如果 train_end_date 和 val_end_date 太接近，val set 可能只有很少樣本
+        #   2. 如果 val_end_date 之後的時間區間剛好沒有 y=1 的商品，test set 會沒有正類
+        #   3. 如果資料本身的時間分布不均，某些時間區間可能剛好沒有正類樣本
+        # 解決方案：在切分後進行 QA 檢查，確保每個 eval set 都有足夠的正負類樣本
         train_mask = meta["representative_batch_time"] <= train_end
         val_mask = (meta["representative_batch_time"] > train_end) & (meta["representative_batch_time"] <= val_end)
         test_mask = meta["representative_batch_time"] > val_end
@@ -674,6 +696,16 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         print(f"  Val period: {train_end} < t <= {val_end}")
         print(f"  Test period: > {val_end}")
         
+        # 檢查每個 split 的 class 分布（預先警告）
+        if len(va_idx) > 0:
+            val_pos = int((y.iloc[va_idx] == 1).sum())
+            val_neg = int((y.iloc[va_idx] == 0).sum())
+            print(f"  Val class distribution: n_0={val_neg}, n_1={val_pos}, pos_rate={val_pos/len(va_idx):.4f}")
+        if len(te_idx) > 0:
+            test_pos = int((y.iloc[te_idx] == 1).sum())
+            test_neg = int((y.iloc[te_idx] == 0).sum())
+            print(f"  Test class distribution: n_0={test_neg}, n_1={test_pos}, pos_rate={test_pos/len(te_idx):.4f}")
+        
         # 只使用 train/val 進行訓練和驗證，test 用於最終評估
         splits = [("train_val", tr_idx, va_idx)]
         if len(te_idx) > 0:
@@ -683,6 +715,60 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         skf = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=42)
         splits = [(fold, tr_idx, va_idx) 
                   for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y)), y))]
+    
+    # ====== Class 分布 QA 檢查 ======
+    # 在切分完成後，檢查每個 split 的 class 分布，避免 eval set 沒有正類導致假神模型
+    # 問題案例：time-based split 時，如果 val/test 時間區間太小或剛好沒有 y=1，會導致評估無效
+    # 問題案例：StratifiedKFold 在某些 fold 中可能因為資料太少而沒有正類
+    
+    # 收集所有驗證/測試集的 class 分布
+    eval_splits_info = []
+    train_idx_for_qa = None
+    for split_name, tr_idx, va_idx in splits:
+        if train_idx_for_qa is None:
+            train_idx_for_qa = tr_idx  # 使用第一個 split 的訓練集索引
+        n_val_0 = int((y.iloc[va_idx] == 0).sum())
+        n_val_1 = int((y.iloc[va_idx] == 1).sum())
+        eval_splits_info.append({
+            "split_name": split_name,
+            "n_samples": len(va_idx),
+            "n_0": n_val_0,
+            "n_1": n_val_1,
+            "pos_rate": n_val_1 / len(va_idx) if len(va_idx) > 0 else 0.0
+        })
+    
+    # 計算訓練集的 class 分布（用於 summary）
+    n_train_0 = int((y.iloc[train_idx_for_qa] == 0).sum()) if train_idx_for_qa is not None and len(train_idx_for_qa) > 0 else 0
+    n_train_1 = int((y.iloc[train_idx_for_qa] == 1).sum()) if train_idx_for_qa is not None and len(train_idx_for_qa) > 0 else 0
+    
+    # 檢查 eval set 的最低門檻（可配置，預設為至少 10 個正類和 10 個負類）
+    min_pos_samples = args.min_eval_pos_samples if hasattr(args, "min_eval_pos_samples") else 10
+    min_neg_samples = args.min_eval_neg_samples if hasattr(args, "min_eval_neg_samples") else 10
+    
+    eval_valid = True
+    invalid_splits = []
+    for info in eval_splits_info:
+        if info["n_1"] < min_pos_samples or info["n_0"] < min_neg_samples:
+            eval_valid = False
+            invalid_splits.append(f"{info['split_name']}: n_0={info['n_0']}, n_1={info['n_1']}")
+    
+    if not eval_valid:
+        error_msg = (
+            f"[QA FAILED] Eval set class distribution insufficient for reliable evaluation.\n"
+            f"  Required: >= {min_pos_samples} positive samples AND >= {min_neg_samples} negative samples\n"
+            f"  Actual splits:\n"
+        )
+        for info in eval_splits_info:
+            error_msg += f"    {info['split_name']}: {info['n_samples']} samples (n_0={info['n_0']}, n_1={info['n_1']}, pos_rate={info['pos_rate']:.4f})\n"
+        error_msg += (
+            f"  Run config: label_mode={args.label_mode}, "
+            f"date_cutoff={args.date_cutoff}, "
+            f"train_end_date={getattr(args, 'train_end_date', 'N/A')}, "
+            f"val_end_date={getattr(args, 'val_end_date', 'N/A')}\n"
+            f"  This run is NOT valid for evaluation. Metrics will be marked as invalid."
+        )
+        print(f"WARNING: {error_msg}")
+        # 不直接 raise，而是標記為 invalid，讓流程繼續但 metrics 設為 null
     
     for split_name, tr_idx, va_idx in splits:
         Xtr, Xva = X_all[tr_idx], X_all[va_idx]
@@ -757,11 +843,30 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     for col in [c for c in df_folds.columns if c not in {"run_id","fold","algorithm","fs_method","n_products","pos_ratio","selected_features"}]:
         agg[f"{col}_mean"] = df_folds[col].mean()
         agg[f"{col}_std"]  = df_folds[col].std(ddof=0)
+    # 計算 eval set 的 class 分布（用於 QA）
+    # 對於 time-based split，使用 test set；對於 StratifiedKFold，使用所有 fold 的平均值
+    if use_time_split:
+        # time-based split：使用 test set（如果存在）或 val set
+        test_info = next((info for info in eval_splits_info if "test" in info["split_name"]), None)
+        if test_info is None:
+            test_info = next((info for info in eval_splits_info if "val" in info["split_name"]), None)
+        n_test_0 = test_info["n_0"] if test_info else 0
+        n_test_1 = test_info["n_1"] if test_info else 0
+    else:
+        # StratifiedKFold：使用所有 fold 的平均值
+        n_test_0 = int(df_folds["support_0"].mean()) if "support_0" in df_folds.columns else 0
+        n_test_1 = int(df_folds["support_1"].mean()) if "support_1" in df_folds.columns else 0
+    
     df_summary = pd.DataFrame([{
         "run_id": run_id,
         "algorithm": alg_name,
         "fs_method": fs_method,
         "folds": args.cv,
+        "n_train_0": n_train_0,
+        "n_train_1": n_train_1,
+        "n_test_0": n_test_0,
+        "n_test_1": n_test_1,
+        "valid_for_evaluation": eval_valid,
         **agg
     }])
 
@@ -785,13 +890,18 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         p_predictions = None
 
     # 構建完整的評估指標和模型資訊（方便之後寫入 DB）
-    metrics_v1 = build_metrics_v1(
-        df_predictions,
-        getattr(args, "topk_values", [20, 50, 100]),
-        getattr(args, "threshold_grid_values", [0.5]),
-        getattr(args, "threshold_min_recall", 0.0),
-        getattr(args, "threshold_target", "f1_1")
-    ) if df_predictions is not None else None
+    # 如果 eval set 不符合 QA 要求，將 metrics 設為 None 或標記為 invalid
+    if not eval_valid:
+        print(f"[QA] Marking metrics as invalid due to insufficient class distribution")
+        metrics_v1 = None
+    else:
+        metrics_v1 = build_metrics_v1(
+            df_predictions,
+            getattr(args, "topk_values", [20, 50, 100]),
+            getattr(args, "threshold_grid_values", [0.5]),
+            getattr(args, "threshold_min_recall", 0.0),
+            getattr(args, "threshold_target", "f1_1")
+        ) if df_predictions is not None else None
     # 在完整資料集上訓練模型以提取特徵重要度
     feature_model = None
     feature_importance = []
@@ -856,6 +966,14 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
             "fs_method": fs_method,
             # 實際丟進去的參數（像 xgb 有開 scale_pos_weight 就會出現在這裡）
             "params": params_dict
+        },
+        "qa_check": {
+            "valid_for_evaluation": eval_valid,
+            "n_train_0": n_train_0,
+            "n_train_1": n_train_1,
+            "n_test_0": n_test_0,
+            "n_test_1": n_test_1,
+            "eval_splits_info": eval_splits_info
         }
     }
     if metrics_v1:
@@ -872,7 +990,10 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
 
     if model_run_path:
         model_run_payload = build_model_run_payload(
-            run_id, args, alg_name, fs_method, dataset_art, files_dict, feature_block_info, metrics_v1, feature_importance, error_examples
+            run_id, args, alg_name, fs_method, dataset_art, files_dict, feature_block_info, 
+            metrics_v1, feature_importance, error_examples,
+            eval_valid=eval_valid, n_train_0=n_train_0, n_train_1=n_train_1, 
+            n_test_0=n_test_0, n_test_1=n_test_1
         )
         with open(model_run_path, "w", encoding="utf-8-sig") as f:
             json.dump(model_run_payload, f, ensure_ascii=False, indent=2)

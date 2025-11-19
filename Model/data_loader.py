@@ -21,6 +21,84 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.database import DatabaseConfig  # <-- same as csv_to_db.py
 
+# ====================== 銷售級距相關工具函數 ======================
+
+# 銷售級距定義（離散 bucket）
+SALES_BUCKETS = [0, 1, 5, 10, 20, 30, 50, 100, 500, 1000, 3000, 5000, 8000, 10000, 
+                 30000, 50000, 100000, 150000, 200000, 300000, 400000, 500000, 1000000]
+
+def get_bucket_gap(prev_bucket: int, next_bucket: int) -> int:
+    """
+    計算兩個級距之間的差距
+    
+    Args:
+        prev_bucket: 前一個級距值
+        next_bucket: 下一個級距值
+    
+    Returns:
+        級距差距
+    """
+    return next_bucket - prev_bucket
+
+def compute_adaptive_delta_threshold(prev_sales: int, 
+                                     base_delta: float = 12.0,
+                                     low_bucket_threshold: int = 30,
+                                     low_bucket_delta: float = 5.0) -> float:
+    """
+    【未來可調整的接口】根據前一個銷售級距計算自適應的 delta 門檻
+    
+    設計意圖：
+    - 低級距商品（<30）使用較小的 delta 門檻，因為相鄰級距差距小
+    - 高級距商品（≥30）使用標準 delta 門檻，因為相鄰級距差距大
+    
+    目前實作：簡單的兩階段門檻
+    未來可擴展為：
+    - 階梯式門檻（多個級距區間對應不同門檻）
+    - 基於「跳幾級」的定義（例如：至少跳 2 級才算成長）
+    
+    Args:
+        prev_sales: 前一個銷售級距值
+        base_delta: 標準 delta 門檻（預設 12）
+        low_bucket_threshold: 低級距的閾值（預設 30）
+        low_bucket_delta: 低級距使用的 delta 門檻（預設 5）
+    
+    Returns:
+        計算後的 delta 門檻
+    """
+    if prev_sales < low_bucket_threshold:
+        return low_bucket_delta
+    else:
+        return base_delta
+
+def get_bucket_levels_jumped(prev_sales: int, next_sales: int) -> int:
+    """
+    【未來可調整的接口】計算跳了幾級
+    
+    可以用這個函數來定義「至少跳 N 級才算成長」，而不是用固定 delta
+    
+    Args:
+        prev_sales: 前一個銷售級距值
+        next_sales: 下一個銷售級距值
+    
+    Returns:
+        跳躍的級數（例如：5→20 跳了 2 級，30→50 跳了 1 級）
+    """
+    if prev_sales >= next_sales:
+        return 0
+    
+    prev_idx = None
+    next_idx = None
+    for i, bucket in enumerate(SALES_BUCKETS):
+        if prev_sales >= bucket:
+            prev_idx = i
+        if next_sales >= bucket:
+            next_idx = i
+    
+    if prev_idx is None or next_idx is None:
+        return 0
+    
+    return next_idx - prev_idx
+
 
 def get_connection():
     """Get a psycopg2 connection using your DatabaseConfig."""
@@ -351,6 +429,13 @@ def load_product_level_training_set(
               CASE
                 WHEN batch_time > %(cutoff)s::timestamp
                      AND prev_sales IS NOT NULL
+                     -- 【級距差異說明】銷售級距是離散 bucket：0, 1, 5, 10, 20, 30, 50, 100, 500, 1000, ...
+                     -- 相鄰級距差距：0→1(1), 1→5(4), 5→10(5), 10→20(10), 20→30(10), 30→50(20), 50→100(50), ...
+                     -- 當 delta_threshold=12 時：
+                     --   - 低級距商品（<30）：相鄰級距差距都 < 12，需要一次跳兩級以上才會滿足條件（例如 5→20, 10→30）
+                     --   - 高級距商品（≥30）：相鄰級距差距都 ≥ 12，一次跳一級就會被視為「大成長」（例如 30→50, 50→100）
+                     -- 這是一個相對「保守，只抓大成長」的設計，對低級距商品更嚴格
+                     -- 【未來調整點】可以考慮階梯式門檻（見 data_loader.py 中的 compute_adaptive_delta_threshold 函數）
                      AND (sales_count - prev_sales) >= %(delta_threshold)s
                      AND (
                           %(ratio_threshold)s IS NULL
@@ -415,11 +500,25 @@ def load_product_level_training_set(
         y_post AS (
           SELECT
             cb.product_id,
+            -- 【重要】使用 MIN(batch_time) 作為 representative_batch_time，用於 time-based split
+            -- 設計理由：每個商品可能有多個 batch_time，選擇最早的可以確保該商品的所有歷史資訊都在訓練集中
+            -- 避免同一個商品同時出現在訓練集和測試集，造成 data leakage
+            -- 【潛在問題】如果某個商品的 batch_time 分布不均，可能會導致 time-based split 時某些時間區間沒有樣本
             MIN(cb.batch_time) AS representative_batch_time,
             MAX(
               CASE
                 WHEN cb.prev_sales IS NULL THEN 0
                 WHEN fs.future_max_sales IS NULL THEN 0
+                -- 【級距差異說明】銷售級距是離散 bucket：0, 1, 5, 10, 20, 30, 50, 100, ...
+                -- 相鄰級距差距：0→1(1), 1→5(4), 5→10(5), 10→20(10), 20→30(10), 30→50(20), 50→100(50), ...
+                -- 當 delta_threshold=12 時：
+                --   - 低級距商品（<30）：相鄰級距差距都 < 12，需要一次跳兩級以上才會滿足條件（例如 5→20, 10→30）
+                --   - 高級距商品（≥30）：相鄰級距差距都 ≥ 12，一次跳一級就會被視為「大成長」（例如 30→50, 50→100）
+                -- 這是一個相對「保守，只抓大成長」的設計，對低級距商品更嚴格
+                -- 【未來調整點】可以考慮：
+                --   1. 低級距用較小的 delta 門檻（例如 delta=5 for sales < 30）
+                --   2. 或用「跳幾級」來定義成長，而不是死用固定 delta
+                --   3. 在 label_delta_threshold 參數中預留階梯式門檻的接口
                 WHEN (fs.future_max_sales - cb.prev_sales) >= %(delta_threshold)s
                      AND (
                           %(ratio_threshold)s IS NULL
