@@ -372,13 +372,13 @@ def load_product_level_training_set(
         WHERE product_id <> ALL(%(excluded)s)
         """
         elif label_mode == "fixed_window":
+            # fixed_window 模式：取消 cutoff 过滤，返回所有数据用于 time-based split
             sql_y = """
         WITH comment_batches AS (
           SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
           FROM product_comments pc
           JOIN products p ON p.id = pc.product_id
-          WHERE pc.capture_time <= %(cutoff)s::timestamp
-            AND (%(single_kw)s IS NULL OR p.keyword = %(single_kw)s)
+          WHERE (%(single_kw)s IS NULL OR p.keyword = %(single_kw)s)
           GROUP BY p.keyword, pc.product_id, pc.capture_time
         ),
         prev_snap AS (
@@ -415,6 +415,7 @@ def load_product_level_training_set(
         y_post AS (
           SELECT
             cb.product_id,
+            MIN(cb.batch_time) AS representative_batch_time,
             MAX(
               CASE
                 WHEN cb.prev_sales IS NULL THEN 0
@@ -434,7 +435,7 @@ def load_product_level_training_set(
            AND fs.batch_time = cb.batch_time
           GROUP BY cb.product_id
         )
-        SELECT product_id, y
+        SELECT product_id, y, representative_batch_time
         FROM y_post
         WHERE product_id <> ALL(%(excluded)s)
         """
@@ -443,14 +444,22 @@ def load_product_level_training_set(
 
         y_df = pd.read_sql(sql_y, conn, params=params)
         if y_df.empty:
-            y_df = pd.DataFrame(columns=["product_id", "y"])
+            if label_mode == "fixed_window":
+                y_df = pd.DataFrame(columns=["product_id", "y", "representative_batch_time"])
+            else:
+                y_df = pd.DataFrame(columns=["product_id", "y"])
+        # 确保 representative_batch_time 存在（fixed_window 模式）
+        if label_mode == "fixed_window" and "representative_batch_time" not in y_df.columns:
+            y_df["representative_batch_time"] = None
 
-        sql_dense = """
+        # 在 fixed_window 模式下，取消 cutoff 过滤以支持 time-based split
+        cutoff_filter = "" if label_mode == "fixed_window" else "WHERE pc.capture_time <= %(cutoff)s::timestamp"
+        sql_dense = f"""
         WITH pre_comments AS (
           SELECT pc.*, p.name, p.price::float AS price, p.keyword
           FROM product_comments pc
           JOIN products p ON p.id = pc.product_id
-          WHERE pc.capture_time <= %(cutoff)s::timestamp
+          {cutoff_filter}
         ),
         media_agg AS (
           SELECT
@@ -531,11 +540,11 @@ def load_product_level_training_set(
           )
           SELECT
             product_id,
-            MAX(CASE WHEN batch_time <= %(cutoff)s::timestamp
+            MAX(CASE WHEN """ + (("TRUE" if label_mode == "fixed_window" else "batch_time <= %(cutoff)s::timestamp")) + """
                         AND prev_sales IS NOT NULL
                         AND sales_count IS DISTINCT FROM prev_sales
                      THEN 1 ELSE 0 END) AS had_any_change_pre,
-            COUNT(*) FILTER (WHERE batch_time <= %(cutoff)s::timestamp
+            COUNT(*) FILTER (WHERE """ + (("TRUE" if label_mode == "fixed_window" else "batch_time <= %(cutoff)s::timestamp")) + """
                                AND prev_sales IS NOT NULL
                                AND sales_count > prev_sales) AS num_increases_pre
           FROM seq
@@ -579,7 +588,9 @@ def load_product_level_training_set(
                                 min_len=2, max_len=4)
 
         if vocab:
-            sql_pairs = """
+            # 在 fixed_window 模式下，取消 cutoff 过滤
+            cutoff_where = "" if label_mode == "fixed_window" else "WHERE pc.capture_time <= %(cutoff)s::timestamp"
+            sql_pairs = f"""
             WITH vocab AS (
               SELECT UNNEST(%(tokens)s::text[]) AS token
             )
@@ -589,14 +600,23 @@ def load_product_level_training_set(
             FROM tfidf_scores ts
             JOIN product_comments pc ON pc.comment_id = ts.comment_id
             JOIN vocab v ON v.token = ts.token
-            WHERE pc.capture_time <= %(cutoff)s::timestamp
+            {cutoff_where}
               AND pc.product_id <> ALL(%(excluded)s)
             """
             pairs = pd.read_sql(sql_pairs, conn, params={"tokens": vocab, **params})
         else:
             pairs = pd.DataFrame(columns=["product_id", "token"])
 
-        meta = df[["product_id", "name", "keyword"]].copy()
+        # 在 fixed_window 模式下，meta 需要包含 representative_batch_time 用于 time-based split
+        if label_mode == "fixed_window" and "representative_batch_time" in y_df.columns:
+            meta = df[["product_id", "name", "keyword"]].copy()
+            # 合并 representative_batch_time
+            meta = meta.merge(y_df[["product_id", "representative_batch_time"]], on="product_id", how="left")
+            # 确保时间格式正确
+            if "representative_batch_time" in meta.columns:
+                meta["representative_batch_time"] = pd.to_datetime(meta["representative_batch_time"], utc=True)
+        else:
+            meta = df[["product_id", "name", "keyword"]].copy()
         id_index = pd.Series(range(len(meta)), index=meta["product_id"])
         if pairs.empty or not vocab:
             X_tfidf = csr_matrix((len(meta), 0), dtype=np.int8)

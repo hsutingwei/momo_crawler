@@ -55,8 +55,75 @@
 | v1_alt | next_batch | gap ≤10天 | 5 & – | 全品類, min_comments=3 | 0.052 | 0.112 | 0.05 → 0.145 / 0.214 / 0.173 | 0.20 / 0.060 | 輕度補貨，廣覆蓋。 |
 | v1_main_fixedwindow | fixed_window | W=7天, align=1天 | 12 & 20% | 同 v1_main | 0.0098 | 0.876 | 0.45 → 0.75 / 0.923 / 0.828 | 0.24 / 0.923 | 高確度補貨信號（樣本極少）。 |
 
-## 6. 後續建議
+## 6. Time-based Split 實作（Phase 3）
 
-1. **Time-based split**：在 fixed_window 模式下取消 cutoff 過濾、改為 `train≤t1 / val≤t2 / test>t2` 的時間切分，以真正模擬「未來」。  
-2. **特徵擴充**：加入 rolling sales、評論密度、情緒分數等，觀察對 v1_main/v1_alt 的 F1/P@K 是否有持續提升。  
-3. **SOP 產出**：每次實驗需更新 `model_run_v1.json` 與本方法說明，讓 Dashboard/論文皆能追蹤到「標記與資料策略」。
+### 6.1 動機與設計
+- **問題**：fixed_window 模式雖然解決了時間尺度不一致的問題，但原本仍依賴 `cutoff` 來限制特徵生成，且使用 `StratifiedKFold` 隨機切分，無法真正模擬「預測未來」的情境。隨機切分會讓訓練集看到未來的資料，造成 data leakage，無法真實反映模型的預測能力。
+- **解決方案**：在 fixed_window 模式下實作 time-based split，取消 cutoff 過濾，改為基於 `representative_batch_time` 的時間切分：
+  - **訓練集**：`representative_batch_time <= train_end_date`
+  - **驗證集**：`train_end_date < representative_batch_time <= val_end_date`
+  - **測試集**：`representative_batch_time > val_end_date`
+- **實作細節**：
+  - **data_loader.py 修改**：
+    - fixed_window 模式的 SQL 中，`comment_batches` CTE 不再限制 `pc.capture_time <= cutoff`，改為返回所有資料。
+    - `sql_dense` 中的 `pre_comments` CTE 也取消 cutoff 過濾（使用條件判斷 `cutoff_filter`）。
+    - `pre_seq` 中的 `had_any_change_pre` 和 `num_increases_pre` 計算時，在 fixed_window 模式下改為 `TRUE` 條件（不再限制 batch_time）。
+    - TF-IDF pairs 的 SQL 也取消 cutoff 過濾。
+    - `y_post` CTE 中新增 `MIN(cb.batch_time) AS representative_batch_time`，取每個商品最早的 batch_time 作為代表時間。
+    - 在 meta DataFrame 中合併 `representative_batch_time`，並確保時間格式為 UTC-aware。
+  - **train.py 修改**：
+    - 新增參數 `--train-end-date` 和 `--val-end-date`。
+    - 在 `run_one_setting` 中，當 `label_mode == "fixed_window"` 且提供時間參數時，自動使用 time-based split 取代 `StratifiedKFold`。
+    - 使用 `representative_batch_time` 進行時間切分，確保訓練時不會看到未來的資訊。
+    - 在 `model_run_v1.json` 的 `data_spec.split_strategy` 中記錄使用的切分策略。
+- **參數**：
+  - `--train-end-date`：訓練集結束日期（格式：YYYY-MM-DD）
+  - `--val-end-date`：驗證集結束日期（格式：YYYY-MM-DD）
+  - 僅在 `--label-mode fixed_window` 時生效
+  - `--date-cutoff` 在 fixed_window 模式下仍可提供，但不會用於資料過濾（僅作為 metadata）
+
+### 6.2 與原有設計的差異
+- **next_batch 模式**：仍使用 `cutoff` 限制特徵生成（`pc.capture_time <= cutoff`），並使用 `StratifiedKFold` 進行交叉驗證。這種方式雖然避免了特徵洩漏，但隨機切分仍可能讓訓練集看到未來的樣本。
+- **fixed_window + time-based split**：
+  - 取消 cutoff 過濾，所有資料都參與特徵生成（包括未來的資料），但透過時間切分確保訓練時不會看到未來的資訊。
+  - 使用 `representative_batch_time`（每個商品最早的 batch_time）作為切分依據，確保時間順序的一致性。
+  - 真正模擬「預測未來」的情境，訓練集只能看到過去的資料，驗證集和測試集代表未來的資料。
+
+### 6.3 設計理由與取捨
+- **為什麼使用 `representative_batch_time`（最早的 batch_time）**：
+  - 每個商品可能有多個 batch_time，選擇最早的可以確保該商品的所有歷史資訊都在訓練集中，避免同一個商品同時出現在訓練集和測試集。
+  - 如果使用最新的 batch_time，可能會導致商品在訓練集和測試集中重複出現，造成 data leakage。
+- **為什麼在 fixed_window 模式下取消 cutoff 過濾**：
+  - fixed_window 模式的 y 標記不再依賴 cutoff（而是使用固定時間窗），因此可以安全地使用所有資料來生成特徵。
+  - 透過 time-based split 確保訓練時不會看到未來的資訊，同時最大化資料利用率。
+- **與 next_batch 模式的對比**：
+  - next_batch 模式依賴 `batch_time > cutoff` 來定義「未來」，因此必須在 SQL 層面限制特徵生成。
+  - fixed_window 模式不依賴 cutoff，可以在 Python 層面進行時間切分，更靈活且更符合預測情境。
+
+### 6.4 使用範例
+```bash
+python Model/train.py \
+  --mode product_level \
+  --label-mode fixed_window \
+  --label-delta-threshold 12 \
+  --label-ratio-threshold 0.2 \
+  --label-window-days 7 \
+  --align-max-gap-days 1 \
+  --min-comments 10 \
+  --keyword-blacklist 口罩 \
+  --train-end-date 2025-06-20 \
+  --val-end-date 2025-06-25 \
+  --date-cutoff 2025-06-25 \
+  --algorithms xgboost \
+  --top-n 100
+```
+
+### 6.5 注意事項
+- 確保 `train_end_date < val_end_date`，否則會導致驗證集為空。
+- `representative_batch_time` 為 NULL 的商品會被排除在切分之外（但這種情況應該很少見）。
+- 如果沒有提供 `--train-end-date` 和 `--val-end-date`，fixed_window 模式仍會使用 `StratifiedKFold`（保持向後兼容）。
+
+## 7. 後續建議
+
+1. **特徵擴充**：加入 rolling sales、評論密度、情緒分數等，觀察對 v1_main/v1_alt 的 F1/P@K 是否有持續提升。  
+2. **SOP 產出**：每次實驗需更新 `model_run_v1.json` 與本方法說明，讓 Dashboard/論文皆能追蹤到「標記與資料策略」。

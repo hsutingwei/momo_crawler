@@ -35,8 +35,9 @@
 | `label_window_days` | `fixed_window` 模式下，往後搜尋 snapshot 的窗口長度（天）。 |
 | `label_max_gap_days` | `next_batch` 模式下，允許 snapshot 與批次的最大時間差；`fixed_window` 模式用於限制「過舊」的參考 snapshot。 |
 | `align_max_gap_days` | 對齊上一筆 snapshot 時可允許的最大差距；可避免把太久以前的 snapshot 當作參考值。 |
-| `min_comments` | 保留在 cutoff 前至少 N 筆評論的商品。 |
+| `min_comments` | 保留在 cutoff 前至少 N 筆評論的商品（fixed_window 模式下不受 cutoff 限制）。 |
 | `keyword_whitelist` / `keyword_blacklist` | 只使用（或排除）特定 keyword 的商品群。 |
+| `train_end_date` / `val_end_date` | Time-based split 的切分點（僅在 fixed_window 模式下使用）。當提供這兩個參數時，會使用時間切分取代 StratifiedKFold。訓練集：`representative_batch_time <= train_end_date`；驗證集：`train_end_date < representative_batch_time <= val_end_date`；測試集：`representative_batch_time > val_end_date`。 |
 
 ### 2.3 單一商品的標記流程（pseudo）
 
@@ -59,7 +60,10 @@
               )
         THEN 1 ELSE 0
    ```
-   - `fixed_window`（Phase 2）：對每個 `batch_time = t`，先取得最近的 `prev_sales`（若與 t 差距大於 `align_max_gap_days` 則捨棄），再搜尋 `t < snapshot_time ≤ t + label_window_days` 的快照，只要在窗口內存在 `(sales_count - prev_sales) ≥ delta`（及 ratio 條件）即標記 1，否則 0。可視需求決定是否保留 `batch_time > cutoff` 限制。
+   - `fixed_window`（Phase 2+）：對每個 `batch_time = t`，先取得最近的 `prev_sales`（若與 t 差距大於 `align_max_gap_days` 則捨棄），再搜尋 `t < snapshot_time ≤ t + label_window_days` 的快照，只要在窗口內存在 `(sales_count - prev_sales) ≥ delta`（及 ratio 條件）即標記 1，否則 0。**Phase 3 更新**：
+     - 取消 `cutoff` 過濾：`comment_batches`、`pre_comments`、TF-IDF pairs 的 SQL 都不再限制 `pc.capture_time <= cutoff`。
+     - 新增 `representative_batch_time`：在 `y_post` CTE 中使用 `MIN(cb.batch_time)` 取得每個商品最早的 batch_time，並在 meta DataFrame 中包含此欄位。
+     - 支援 time-based split：當提供 `--train-end-date` 和 `--val-end-date` 時，使用時間切分取代 StratifiedKFold。
 5. 將結果 merge 回 dense 表；在 pandas 端依 `keyword_*`/`min_comments` 做最後篩選。
 6. 以 `fetch_top_terms` 取得 vocab，並從 `tfidf_scores` 建立 `X_tfidf`。
 7. 回傳 `(X_dense_df, X_tfidf, y, meta, vocab)` 給訓練流程。
@@ -74,9 +78,19 @@
    dataset_art = save_dataset_artifacts(..., labeling_config, sampling_config)
    ```
 2. **組裝特徵**：Dense ➜ `std_scaler_to_sparse`，再與 `X_tfidf` hstack，並建立 feature 名稱（dense 欄位 + `tfidf::<token>`）。
-3. **模型與交叉驗證**：
+3. **模型與資料切分**：
    - `build_model` 依 `alg_name` 建立 XGBoost / LightGBM / SVM（此 sweep 僅用 XGBoost）。
-   - `StratifiedKFold` 分成 `cv` 折；每折可選擇做 `lgbm_fs`、oversampling（random/SMOTE/scale_pos_weight）。
+   - **資料切分策略**：
+     - **預設（next_batch 模式或未提供時間參數）**：使用 `StratifiedKFold` 分成 `cv` 折，進行交叉驗證。
+     - **Time-based split（fixed_window 模式 + 提供時間參數）**：
+       - 當 `label_mode == "fixed_window"` 且提供 `--train-end-date` 和 `--val-end-date` 時，自動使用時間切分。
+       - 切分規則：
+         - 訓練集：`representative_batch_time <= train_end_date`
+         - 驗證集：`train_end_date < representative_batch_time <= val_end_date`
+         - 測試集：`representative_batch_time > val_end_date`
+       - 此方式真正模擬「預測未來」的情境，避免 data leakage。
+       - 使用 `representative_batch_time`（每個商品最早的 batch_time）作為切分依據，確保同一個商品不會同時出現在訓練集和測試集中。
+   - 每折/每個 split 可選擇做 `lgbm_fs`、oversampling（random/SMOTE/scale_pos_weight）。
    - 訓練後記錄 fold metrics (`eval_metrics`) 與逐筆 prediction（`product_id`, `keyword`, `y_true`, `y_pred`, `y_score`）。
 4. **整體評估**：
    - 將所有驗證預測合併為 `df_predictions`。
@@ -96,7 +110,14 @@
 - 以時間順序尊重的方式對齊評論批次與銷售快照，並依設定標記「下一批是否顯著增加」。
 - 透過 CLI 參數控制 y 定義與樣本篩選，確保資料語意符合研究需要。
 - 建立 dense + TF 特徵並儲存 dataset manifest，以便重現與紀錄資料策略。
-- 交叉驗證 + 全量評估，輸出含 PR-AUC、Top-K、threshold sweep、feature importance、錯誤樣本等資訊的 `model_run_v1.json`。
+- **資料切分策略**：
+  - **next_batch 模式**：使用 `StratifiedKFold` 進行交叉驗證。特徵生成時使用 `cutoff` 限制，避免 data leakage。
+  - **fixed_window 模式（Phase 3 更新）**：
+    - 預設：使用 `StratifiedKFold` 進行交叉驗證（向後兼容）。
+    - 當提供 `--train-end-date` 和 `--val-end-date` 時：使用 time-based split（`train≤t1 / val≤t2 / test>t2`），真正模擬預測未來的情境。
+    - 取消 cutoff 過濾，所有資料都參與特徵生成，但透過時間切分確保訓練時不會看到未來的資訊。
+    - 使用 `representative_batch_time`（每個商品最早的 batch_time）作為切分依據。
+- 全量評估，輸出含 PR-AUC、Top-K、threshold sweep、feature importance、錯誤樣本等資訊的 `model_run_v1.json`。
 
 ### 4.2 想調整哪些部分？
 

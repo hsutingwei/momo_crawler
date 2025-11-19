@@ -115,9 +115,13 @@ def parse_args():
     ap.add_argument("--label-window-days", type=float, default=7.0,
                     help="fixed_window ?????? (?)")
     ap.add_argument("--align-max-gap-days", type=float, default=None,
-                    help="????? snapshot ???????? (?)")
+                    help="對齊 snapshot 時可允許的最大差距（天）")
     ap.add_argument("--min-comments", type=int, default=0,
                     help="資料篩選：時間窗口內至少需要 N 條評論的商品才會被納入訓練")
+    ap.add_argument("--train-end-date", type=str, default=None,
+                    help="Time-based split：訓練集結束日期（格式：YYYY-MM-DD），僅在 fixed_window 模式下使用")
+    ap.add_argument("--val-end-date", type=str, default=None,
+                    help="Time-based split：驗證集結束日期（格式：YYYY-MM-DD），僅在 fixed_window 模式下使用")
     ap.add_argument("--keyword-blacklist", type=str, default=None,
                     help="資料篩選：排除的關鍵詞列表（逗號分隔）")
     ap.add_argument("--keyword-whitelist", type=str, default=None,
@@ -510,7 +514,11 @@ def build_model_run_payload(run_id: str,
             "pos_samples": int(data_summary.get("pos", 0)),
             "neg_samples": int(data_summary.get("neg", 0)),
             "pos_rate": float(data_summary.get("pos_rate", 0.0)),
-            "split_strategy": f"StratifiedKFold (n_splits={args.cv})"
+            "split_strategy": (
+            f"Time-based split (train≤{args.train_end_date}, val≤{args.val_end_date}, test>{args.val_end_date})"
+            if (args.label_mode == "fixed_window" and args.train_end_date and args.val_end_date)
+            else f"StratifiedKFold (n_splits={args.cv})"
+        )
         },
         "model_spec": {
             "algorithm": alg_name,
@@ -634,14 +642,49 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     if model is None:
         return None, None, None
 
-    # 10 折
-    skf = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=42)
+    # 決定使用 time-based split 還是 StratifiedKFold
+    use_time_split = (args.label_mode == "fixed_window" and 
+                      args.train_end_date is not None and 
+                      args.val_end_date is not None and
+                      "representative_batch_time" in meta.columns)
+    
     fold_rows = []
-
-    # 收集所有預測結果
     all_predictions = []
     
-    for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y)), y)):
+    if use_time_split:
+        # Time-based split：train≤t1 / val≤t2 / test>t2
+        train_end = pd.to_datetime(args.train_end_date, utc=True)
+        val_end = pd.to_datetime(args.val_end_date, utc=True)
+        
+        # 確保時間格式正確
+        if meta["representative_batch_time"].dt.tz is None:
+            meta["representative_batch_time"] = meta["representative_batch_time"].dt.tz_localize("UTC")
+        
+        # 切分資料
+        train_mask = meta["representative_batch_time"] <= train_end
+        val_mask = (meta["representative_batch_time"] > train_end) & (meta["representative_batch_time"] <= val_end)
+        test_mask = meta["representative_batch_time"] > val_end
+        
+        tr_idx = np.where(train_mask)[0]
+        va_idx = np.where(val_mask)[0]
+        te_idx = np.where(test_mask)[0]
+        
+        print(f"[Time-based Split] Train: {len(tr_idx)}, Val: {len(va_idx)}, Test: {len(te_idx)}")
+        print(f"  Train period: <= {train_end}")
+        print(f"  Val period: {train_end} < t <= {val_end}")
+        print(f"  Test period: > {val_end}")
+        
+        # 只使用 train/val 進行訓練和驗證，test 用於最終評估
+        splits = [("train_val", tr_idx, va_idx)]
+        if len(te_idx) > 0:
+            splits.append(("test", tr_idx, te_idx))
+    else:
+        # 使用 StratifiedKFold（原有邏輯）
+        skf = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=42)
+        splits = [(fold, tr_idx, va_idx) 
+                  for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y)), y))]
+    
+    for split_name, tr_idx, va_idx in splits:
         Xtr, Xva = X_all[tr_idx], X_all[va_idx]
         ytr, yva = y.iloc[tr_idx], y.iloc[va_idx]
         meta_va = meta.iloc[va_idx]  # 驗證集的 meta 資料
@@ -685,7 +728,7 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         for i, (true_val, pred_val, score_val) in enumerate(zip(yva, y_pred, y_score)):
             pred_row = {
                 "run_id": run_id,
-                "fold": fold,
+                "fold": str(split_name) if use_time_split else f"fold_{split_name}",
                 "product_id": int(meta_va.iloc[i].get("product_id", 0)),
                 "keyword": meta_va.iloc[i].get("keyword", ""),
                 "y_true": int(true_val),
@@ -696,7 +739,7 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
         
         row = {
             "run_id": run_id,
-            "fold": fold,
+            "fold": str(split_name) if use_time_split else f"fold_{split_name}",
             "algorithm": alg_name,
             "fs_method": fs_method,
             "n_products": int(len(va_idx)),

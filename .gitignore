@@ -21,6 +21,8 @@ Thumbs.db
 .env
 .env.*
 
+**/datasets/**
+
 error_report_*.txt
 clean_decimal_report_*.csv
 fix_decreasing_report_*.csv
@@ -30,6 +32,7 @@ preprocess_v2
 preprocess_v3
 /Model/load_training
 /Model/outputs
+/Model/outputs*
 /Model/analysis_outputs
 /Model/embeddings/outputs
 /Model/embeddings/train_output
