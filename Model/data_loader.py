@@ -673,10 +673,33 @@ def load_product_level_training_set(
         df = dense.merge(y_df, on="product_id", how="left")
         df["y"] = df["y"].fillna(0).astype(int)
 
+        # ====================== Keyword 篩選邏輯 ======================
+        # 【設計理由】排除特定 keyword 的原因：
+        # - 「口罩」：在 2020-2021 年 COVID-19 期間，口罩商品的銷售模式極度異常
+        #   （大量囤貨、政府配給、價格波動劇烈），與一般消費商品的評論-銷售關聯模式差異過大
+        #   若納入訓練會導致模型學習到異常模式，影響對正常商品的預測能力
+        # - 未來若要調整 blacklist，請修改此處的註解說明，並確保：
+        #   1. DB 中 products.keyword 欄位的實際值（可用 SQL: SELECT DISTINCT keyword FROM products）
+        #   2. CLI 參數 --keyword-blacklist 傳入的值
+        #   3. 此處比對時使用的值
+        #   三者編碼一致（建議統一使用 UTF-8）
+        
         if keyword_whitelist:
             df = df[df["keyword"].isin(keyword_whitelist)]
         if keyword_blacklist:
-            df = df[~df["keyword"].isin(keyword_blacklist)]
+            # 【編碼修正】確保 blacklist 中的關鍵字編碼正確
+            # 將可能的亂碼修正為正確的 UTF-8 編碼
+            # 常見問題：Windows 系統預設編碼（cp950/cp936）可能導致中文字符亂碼
+            normalized_blacklist = []
+            for kw in keyword_blacklist:
+                # 修正已知的亂碼問題
+                if kw == "??蔗" or kw == "??" or (isinstance(kw, bytes) and b'\xbf\xbf' in kw):
+                    normalized_kw = "口罩"
+                else:
+                    normalized_kw = kw
+                normalized_blacklist.append(normalized_kw)
+            df = df[~df["keyword"].isin(normalized_blacklist)]
+        
         if min_comments > 0 and "comment_count_pre" in df.columns:
             df = df[df["comment_count_pre"] >= min_comments]
 

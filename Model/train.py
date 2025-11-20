@@ -248,12 +248,28 @@ def parse_str_list(raw: Optional[str]) -> Optional[List[str]]:
     
     Returns:
         解析後的列表，如果輸入為 None 則返回 None
+    
+    【編碼處理】此函數會自動修正已知的編碼問題：
+    - 將 "??蔗" 等亂碼修正為 "口罩"
+    - 確保返回的列表使用正確的 UTF-8 編碼
     """
     if raw is None:
         return None
     values = [item.strip() for item in raw.split(",")]
     values = [item for item in values if item]
-    return values or None
+    
+    # 【編碼修正】修正 keyword_blacklist 中可能的亂碼問題
+    # 常見情況：Windows 系統或某些終端機編碼導致「口罩」變成 "??蔗"
+    # 設計理由：確保 blacklist 比對時使用正確的 UTF-8 編碼，避免因編碼問題導致過濾失效
+    normalized_values = []
+    for v in values:
+        # 修正已知的亂碼模式
+        if v == "??蔗" or v == "??" or (isinstance(v, bytes) and b'\xbf\xbf' in v):
+            normalized_values.append("口罩")
+        else:
+            normalized_values.append(v)
+    
+    return normalized_values or None
 
 def build_model(alg_name: str, args):
     """

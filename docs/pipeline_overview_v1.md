@@ -267,4 +267,98 @@
 
 ---
 
+## 6. 重新產生 Baseline Run 的流程
+
+### 6.1 完整指令範例（next_batch v1_main）
+
+以下指令可以重新產生一個 baseline run（next_batch v1_main, global_top100）：
+
+```bash
+python Model/train.py \
+  --mode product_level \
+  --label-mode next_batch \
+  --label-delta-threshold 12.0 \
+  --label-ratio-threshold 0.2 \
+  --label-max-gap-days 14.0 \
+  --min-comments 10 \
+  --keyword-blacklist 口罩 \
+  --date-cutoff 2025-06-25 \
+  --algorithms xgboost \
+  --fs-methods no_fs \
+  --top-n 100 \
+  --cv 10 \
+  --outdir Model/outputs_baseline_v2 \
+  --oversample none \
+  --min-eval-pos-samples 10 \
+  --min-eval-neg-samples 10
+```
+
+**重要參數說明**：
+- `--mode product_level`：使用商品層級的資料集
+- `--label-mode next_batch`：使用 next_batch 標記模式（v1_main）
+- `--label-delta-threshold 12.0`：銷售級距變化門檻（≥12）
+- `--label-ratio-threshold 0.2`：相對成長率門檻（≥20%）
+- `--keyword-blacklist 口罩`：排除口罩商品（編碼已修正，確保使用正確的 UTF-8）
+- `--cv 10`：使用 10 折 StratifiedKFold 交叉驗證
+- `--min-eval-pos-samples 10`：QA 檢查：eval set 至少需要 10 個正類樣本
+- `--min-eval-neg-samples 10`：QA 檢查：eval set 至少需要 10 個負類樣本
+
+### 6.2 輸出檔案
+
+執行完成後，會在 `--outdir` 目錄下產生：
+
+1. **Summary CSV**：`run_YYYYMMDD_xxx_summary.csv`
+   - 包含整體評估指標（accuracy, F1, AUC 等）
+   - 包含 QA 檢查結果（`n_train_0`, `n_train_1`, `n_test_0`, `n_test_1`, `valid_for_evaluation`）
+
+2. **Predictions CSV**：`run_YYYYMMDD_xxx_predictions.csv`
+   - 每筆樣本的預測結果（product_id, keyword, y_true, y_pred, y_score）
+
+3. **Model Run JSON**：`run_YYYYMMDD_xxx_model_run_v1.json`
+   - 完整的實驗配置與結果（problem spec, data spec, model spec, metrics, feature importance, error analysis）
+
+4. **Dataset Artifacts**：`datasets/dataset_*.json` 等
+   - 資料集 manifest，記錄資料載入的完整配置
+
+### 6.3 比較「修正 blacklist 前後」的 Run
+
+當修正了 `keyword_blacklist` 的編碼問題後，重新執行 baseline run 時，應關注以下欄位：
+
+| 欄位 | 說明 | 預期變化 |
+| --- | --- | --- |
+| `sampling_config.keyword_blacklist` | 在 `model_run_v1.json` 中應顯示 `["口罩"]`（正確編碼），而非 `["??蔗"]` | 編碼修正 |
+| `data_spec.n_samples` | 總樣本數 | 可能略有變化（如果之前 blacklist 未正確生效） |
+| `data_spec.pos_rate` | 正類比例 | 可能略有變化 |
+| `metrics.binary_overall.pr_auc` | PR-AUC | 應保持相近（如果之前 blacklist 已正確生效） |
+| `metrics.threshold_search.chosen_threshold` | 最佳 threshold | 應保持相近 |
+| `qa_check.valid_for_evaluation` | QA 檢查結果 | 應為 `true`（如果樣本數足夠） |
+
+**檢查方式**：
+1. 確認 `model_run_v1.json` 中的 `sampling_config.keyword_blacklist` 為 `["口罩"]`（正確編碼）
+2. 確認 predictions CSV 中沒有 keyword="口罩" 的樣本
+3. 比較修正前後的 `n_samples`、`pos_rate`、`pr_auc` 等指標，確認變化在合理範圍內
+
+### 6.4 後續分析
+
+執行完 baseline run 後，可以使用以下工具進行進一步分析：
+
+1. **Per-keyword 分析**：
+   ```bash
+   python analysis/analyze_keyword_performance_all.py \
+     --predictions Model/outputs_baseline_v2/run_YYYYMMDD_xxx_predictions.csv \
+     --model-run Model/outputs_baseline_v2/run_YYYYMMDD_xxx_model_run_v1.json \
+     --output-dir analysis
+   ```
+   會產生 `analysis/keyword_performance_summary.csv`，包含每個 keyword 的表現指標。
+
+2. **特定 keyword 詳細分析**：
+   ```bash
+   python analysis/analyze_keyword_performance.py \
+     --keyword 益生菌 \
+     --predictions Model/outputs_baseline_v2/run_YYYYMMDD_xxx_predictions.csv \
+     --model-run Model/outputs_baseline_v2/run_YYYYMMDD_xxx_model_run_v1.json
+   ```
+
+---
+
 > **維護提醒**：往後只要調整資料定義、特徵或訓練流程，請同步更新此文件（尤其是參數/流程說明與 sweep 設定），確保研究者能清楚追蹤每次實驗的語意與流程。
