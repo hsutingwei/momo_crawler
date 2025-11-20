@@ -1,7 +1,8 @@
 ﻿# Run Report: run_20250625_global_top100_xgboost_no_fs_20251119-225842
 
 ## 1. Run 基本資訊
-- un_id: 0e331c5c-3ee6-413b-ac39-6ddf762a0be2
+- 
+un_id: 0e331c5c-3ee6-413b-ac39-6ddf762a0be2
 - label_mode: next_batch（v1_main）
 - date_cutoff: 2025-06-25
 - outdir: Model/outputs_fixedwindow_v2
@@ -10,15 +11,17 @@
 ## 2. 資料摘要
 - 
 _samples: 1,756（pos=141, neg=1,615，pos_rate=0.080）
-- 篩選條件：delta≥12, atio≥20%, max_gap≤14d, min_comments≥10, keyword_blacklist={口罩}。
+- 篩選條件：delta≥12, 
+atio≥20%, max_gap≤14d, min_comments≥10, keyword_blacklist={口罩}。
 - QA：
 _train_0=1453, 
 _train_1=127, 
 _test_0=161, 
-_test_1=14, alid_for_evaluation=True。
+_test_1=14, valid_for_evaluation=True。
 
 ## 3. 模型與切分
-- 模型：XGBoost (	ree_method=gpu_hist, max_depth=8, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, eg_lambda=1.0)，未啟用 oversampling。
+- 模型：XGBoost (	ree_method=gpu_hist, max_depth=8, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, 
+eg_lambda=1.0)，未啟用 oversampling。
 - 特徵：10 個 dense（媒體/互動/歷史 sales）＋ 100 個 TF tokens（global vocab）。
 - 切分：StratifiedKFold (5 folds)；同一套 dataset 也在 QA 段落確認 train/test 仍有正負樣本。
 
