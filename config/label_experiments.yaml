@@ -1,0 +1,17 @@
+experiments:
+  - name: "baseline_v1"
+    strategy: "absolute"
+    params:
+      delta_threshold: 10
+      
+  - name: "hybrid_relaxed"
+    strategy: "hybrid"
+    params:
+      delta_threshold: 10
+      ratio_threshold: 0.1
+      
+  - name: "hybrid_strict"
+    strategy: "hybrid"
+    params:
+      delta_threshold: 10
+      ratio_threshold: 0.3

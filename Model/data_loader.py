@@ -342,6 +342,8 @@ def load_product_level_training_set(
     min_comments: int = 0,
     keyword_whitelist: Optional[List[str]] = None,
     keyword_blacklist: Optional[List[str]] = None,
+    label_strategy: str = "absolute",
+    label_params: Optional[Dict] = None,
 ) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
     """
     ?? (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
@@ -352,13 +354,33 @@ def load_product_level_training_set(
     exclude_products = exclude_products or []
     conn = get_connection()
     try:
+        # ====================== Label Strategy Resolution ======================
+        # 'absolute' = 目前正式線的既有行為 (只看 delta)
+        # 'hybrid'   = 方案 A (絕對 delta + 相對成長率 ratio)
+        
+        eff_ratio_threshold = label_ratio_threshold  # Default to argument value
+        
+        if label_strategy == "absolute":
+            # Force ratio check to be disabled (None) for absolute strategy
+            eff_ratio_threshold = None
+        elif label_strategy == "hybrid":
+            if not label_params or "ratio_threshold" not in label_params:
+                raise ValueError("Strategy 'hybrid' requires 'ratio_threshold' in label_params")
+            eff_ratio_threshold = float(label_params["ratio_threshold"])
+        elif label_strategy == "default":
+             # Keep existing behavior (use arguments as is)
+             pass
+        else:
+             # For Phase 1, we only support absolute and hybrid
+             raise ValueError(f"Unsupported label_strategy: {label_strategy}")
+
         align_gap_seconds = (align_max_gap_days * 86400.0) if align_max_gap_days else None
         params = {
             "cutoff": date_cutoff,
             "excluded": exclude_products if exclude_products else [-1],
             "single_kw": single_keyword,
             "delta_threshold": label_delta_threshold,
-            "ratio_threshold": label_ratio_threshold,
+            "ratio_threshold": eff_ratio_threshold,
             "max_gap_seconds": (label_max_gap_days * 86400.0) if label_max_gap_days else None,
             "label_window_days": label_window_days,
             "align_gap_seconds": align_gap_seconds
