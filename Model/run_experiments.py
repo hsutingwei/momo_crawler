@@ -73,6 +73,7 @@ def run_experiment(exp_config, output_dir):
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     
     metrics_list = []
+    error_analysis_rows = [] # Collection for error analysis
     
     # Detect Multiclass
     num_classes = y.nunique()
@@ -191,8 +192,58 @@ def run_experiment(exp_config, output_dir):
             # Merge best metrics
             m.update(best_metrics)
             
+            # For binary_explosive, collect data for error analysis
+            if exp_config['name'] == 'binary_explosive':
+                # Get validation meta and dense features
+                meta_val = meta.iloc[va_idx].reset_index(drop=True)
+                X_dense_val = X_dense_df.iloc[va_idx].reset_index(drop=True)
+                
+                # Create a DataFrame for this fold's predictions
+                fold_df = pd.DataFrame({
+                    "product_id": meta_val["product_id"],
+                    "y_true": y_val.values,
+                    "y_prob": y_prob
+                })
+                
+                # Add dense features
+                # We only add the ones requested for analysis to keep it light, or all dense features
+                # User requested: price, comment_count_pre, score_mean, like_count_sum, had_any_change_pre, num_increases_pre, media flags
+                cols_to_add = [
+                    "price", "comment_count_pre", "score_mean", "like_count_sum", 
+                    "had_any_change_pre", "num_increases_pre", 
+                    "has_image_urls", "has_video_url", "has_reply_content"
+                ]
+                for c in cols_to_add:
+                    if c in X_dense_val.columns:
+                        fold_df[c] = X_dense_val[c]
+                
+                error_analysis_rows.append(fold_df)
+
         metrics_list.append(m)
     
+    # Save Error Analysis CSV if applicable
+    if exp_config['name'] == 'binary_explosive' and error_analysis_rows:
+        full_error_df = pd.concat(error_analysis_rows, ignore_index=True)
+        
+        # Calculate best threshold on the full dataset
+        thresholds = np.linspace(0.05, 0.95, 19)
+        best_th_full = 0.5
+        best_f1_full = -1.0
+        
+        for th in thresholds:
+            preds = (full_error_df["y_prob"] >= th).astype(int)
+            f1 = f1_score(full_error_df["y_true"], preds, zero_division=0)
+            if f1 > best_f1_full:
+                best_f1_full = f1
+                best_th_full = th
+        
+        full_error_df["y_pred_best"] = (full_error_df["y_prob"] >= best_th_full).astype(int)
+        full_error_df["best_threshold_used"] = best_th_full
+        
+        out_csv = os.path.join(output_dir, "binary_explosive_error_analysis.csv")
+        full_error_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"Saved error analysis data to {out_csv} (Best Th: {best_th_full:.4f})")
+
     # Average Metrics
     avg_metrics = {k: float(np.mean([m[k] for m in metrics_list])) for k in metrics_list[0].keys()}
     
