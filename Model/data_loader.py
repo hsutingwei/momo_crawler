@@ -344,6 +344,7 @@ def load_product_level_training_set(
     keyword_blacklist: Optional[List[str]] = None,
     label_strategy: str = "absolute",
     label_params: Optional[Dict] = None,
+    return_meta_details: bool = False,
 ) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
     """
     ?? (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
@@ -470,11 +471,36 @@ def load_product_level_training_set(
                      )
                 THEN 1 ELSE 0
               END
-            ) AS y
+            ) AS y,
+            MAX(
+              CASE
+                WHEN batch_time > %(cutoff)s::timestamp
+                     AND prev_sales IS NOT NULL
+                     AND (
+                          %(max_gap_seconds)s IS NULL
+                          OR EXTRACT(EPOCH FROM (snapshot_time - batch_time)) <= %(max_gap_seconds)s
+                     )
+                THEN (sales_count - prev_sales)
+                ELSE NULL
+              END
+            ) AS max_raw_delta,
+            MAX(
+              CASE
+                WHEN batch_time > %(cutoff)s::timestamp
+                     AND prev_sales IS NOT NULL
+                     AND prev_sales > 0
+                     AND (
+                          %(max_gap_seconds)s IS NULL
+                          OR EXTRACT(EPOCH FROM (snapshot_time - batch_time)) <= %(max_gap_seconds)s
+                     )
+                THEN ((sales_count::float / prev_sales) - 1)
+                ELSE NULL
+              END
+            ) AS max_raw_ratio
           FROM seq
           GROUP BY product_id
         )
-        SELECT product_id, y
+        SELECT product_id, y, max_raw_delta, max_raw_ratio
         FROM y_post
         WHERE product_id <> ALL(%(excluded)s)
         """
@@ -549,14 +575,29 @@ def load_product_level_training_set(
                      )
                 THEN 1 ELSE 0
               END
-            ) AS y
+            ) AS y,
+            MAX(
+                CASE
+                    WHEN cb.prev_sales IS NULL THEN NULL
+                    WHEN fs.future_max_sales IS NULL THEN NULL
+                    ELSE (fs.future_max_sales - cb.prev_sales)
+                END
+            ) AS max_raw_delta,
+            MAX(
+                CASE
+                    WHEN cb.prev_sales IS NULL THEN NULL
+                    WHEN cb.prev_sales = 0 THEN NULL
+                    WHEN fs.future_max_sales IS NULL THEN NULL
+                    ELSE ((fs.future_max_sales::float / cb.prev_sales) - 1)
+                END
+            ) AS max_raw_ratio
           FROM prev_snap cb
           LEFT JOIN future_snap fs
             ON fs.product_id = cb.product_id
            AND fs.batch_time = cb.batch_time
           GROUP BY cb.product_id
         )
-        SELECT product_id, y, representative_batch_time
+        SELECT product_id, y, representative_batch_time, max_raw_delta, max_raw_ratio
         FROM y_post
         WHERE product_id <> ALL(%(excluded)s)
         """
@@ -761,6 +802,11 @@ def load_product_level_training_set(
                 meta["representative_batch_time"] = pd.to_datetime(meta["representative_batch_time"], utc=True)
         else:
             meta = df[["product_id", "name", "keyword"]].copy()
+            
+        if return_meta_details:
+            # Merge max_raw_delta and max_raw_ratio from y_df
+            if "max_raw_delta" in y_df.columns:
+                meta = meta.merge(y_df[["product_id", "max_raw_delta", "max_raw_ratio"]], on="product_id", how="left")
         id_index = pd.Series(range(len(meta)), index=meta["product_id"])
         if pairs.empty or not vocab:
             X_tfidf = csr_matrix((len(meta), 0), dtype=np.int8)
