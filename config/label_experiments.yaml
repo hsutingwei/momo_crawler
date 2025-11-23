@@ -15,3 +15,15 @@ experiments:
     params:
       delta_threshold: 10
       ratio_threshold: 0.3
+
+  - name: "multiclass_percentile"
+    strategy: "multiclass"
+    params:
+      delta_threshold: 10
+      ratio_buckets: [0.67, 1.0]
+
+  - name: "binary_explosive"
+    strategy: "hybrid"
+    params:
+      delta_threshold: 10
+      ratio_threshold: 1.0

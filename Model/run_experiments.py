@@ -6,7 +6,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, average_precision_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, 
+    average_precision_score, roc_auc_score, confusion_matrix, classification_report
+)
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
 from scipy.sparse import hstack
 
@@ -70,35 +74,80 @@ def run_experiment(exp_config, output_dir):
     
     metrics_list = []
     
-    for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y)), y)):
+    # Detect Multiclass
+    num_classes = y.nunique()
+    is_multiclass = num_classes > 2
+    
+    y_encoded = y
+    le = None
+    explosive_class_idx = None
+    
+    if is_multiclass:
+        le = LabelEncoder()
+        y_encoded = pd.Series(le.fit_transform(y), index=y.index)
+        num_classes = len(le.classes_)
+        print(f"Multiclass detected: {num_classes} classes")
+        print(f"Classes mapping: {dict(zip(le.classes_, range(num_classes)))}")
+        print("Class Distribution:\n", y.value_counts().sort_index())
+        
+        if 3 in le.classes_:
+            explosive_class_idx = le.transform([3])[0]
+
+    for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_encoded)), y_encoded)):
         X_train, X_val = X_all[tr_idx], X_all[va_idx]
-        y_train, y_val = y.iloc[tr_idx], y.iloc[va_idx]
+        y_train, y_val = y_encoded.iloc[tr_idx], y_encoded.iloc[va_idx]
         
         # Use XGBoost with fixed random_state
-        model = XGBClassifier(
-            n_estimators=100, # Reduced for speed in experiment
-            learning_rate=0.05,
-            max_depth=6,
-            random_state=42,
-            n_jobs=-1,
-            eval_metric="logloss"
-        )
+        if is_multiclass:
+            model = XGBClassifier(
+                n_estimators=100,
+                learning_rate=0.05,
+                max_depth=6,
+                random_state=42,
+                n_jobs=-1,
+                objective="multi:softprob",
+                num_class=num_classes,
+                eval_metric="mlogloss",
+                use_label_encoder=False
+            )
+        else:
+            model = XGBClassifier(
+                n_estimators=100,
+                learning_rate=0.05,
+                max_depth=6,
+                random_state=42,
+                n_jobs=-1,
+                eval_metric="logloss",
+                use_label_encoder=False
+            )
         
         model.fit(X_train, y_train)
         
         # Predict
         y_pred = model.predict(X_val)
-        y_prob = model.predict_proba(X_val)[:, 1]
         
-        # Calculate Metrics (y=1 is positive)
-        m = {
-            "accuracy": accuracy_score(y_val, y_pred),
-            "precision": precision_score(y_val, y_pred, zero_division=0),
-            "recall": recall_score(y_val, y_pred, zero_division=0),
-            "f1": f1_score(y_val, y_pred, zero_division=0),
-            "pr_auc": average_precision_score(y_val, y_prob),
-            "roc_auc": roc_auc_score(y_val, y_prob)
-        }
+        if is_multiclass:
+            # Multiclass Metrics
+            m = {
+                "accuracy": accuracy_score(y_val, y_pred),
+                "f1_macro": f1_score(y_val, y_pred, average="macro", zero_division=0),
+                "f1_weighted": f1_score(y_val, y_pred, average="weighted", zero_division=0),
+                # Class 3 (Explosive) Metrics if exists
+                "f1_class3": f1_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
+                "precision_class3": precision_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
+                "recall_class3": recall_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0
+            }
+        else:
+            # Binary Metrics
+            y_prob = model.predict_proba(X_val)[:, 1]
+            m = {
+                "accuracy": accuracy_score(y_val, y_pred),
+                "precision": precision_score(y_val, y_pred, zero_division=0),
+                "recall": recall_score(y_val, y_pred, zero_division=0),
+                "f1": f1_score(y_val, y_pred, zero_division=0),
+                "pr_auc": average_precision_score(y_val, y_prob),
+                "roc_auc": roc_auc_score(y_val, y_prob)
+            }
         metrics_list.append(m)
     
     # Average Metrics
@@ -107,9 +156,9 @@ def run_experiment(exp_config, output_dir):
     result = {
         "experiment": exp_config['name'],
         "n_samples": len(y),
-        "n_pos": n_pos,
-        "n_neg": n_neg,
-        "pos_rate": pos_rate,
+        "n_pos": n_pos if not is_multiclass else int((y==3).sum()), # For multiclass, treat Class 3 as "Pos" for summary
+        "n_neg": n_neg if not is_multiclass else int((y!=3).sum()),
+        "pos_rate": pos_rate if not is_multiclass else (y==3).mean(),
         "status": "completed",
         **avg_metrics
     }

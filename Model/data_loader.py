@@ -368,11 +368,18 @@ def load_product_level_training_set(
             if not label_params or "ratio_threshold" not in label_params:
                 raise ValueError("Strategy 'hybrid' requires 'ratio_threshold' in label_params")
             eff_ratio_threshold = float(label_params["ratio_threshold"])
+        elif label_strategy == "multiclass":
+             # For multiclass, we use SQL to filter candidates (delta >= 10)
+             # and then refine classes in Python based on ratio_buckets.
+             # So we disable ratio check in SQL (eff_ratio_threshold = None)
+             # and force return_meta_details = True to get max_raw_ratio.
+             eff_ratio_threshold = None
+             return_meta_details = True
         elif label_strategy == "default":
              # Keep existing behavior (use arguments as is)
              pass
         else:
-             # For Phase 1, we only support absolute and hybrid
+             # For Phase 1 & 2, we support absolute, hybrid, and multiclass
              raise ValueError(f"Unsupported label_strategy: {label_strategy}")
 
         align_gap_seconds = (align_max_gap_days * 86400.0) if align_max_gap_days else None
@@ -734,6 +741,49 @@ def load_product_level_training_set(
         dense = pd.read_sql(sql_dense, conn, params=params)
 
         df = dense.merge(y_df, on="product_id", how="left")
+        
+        # ====================== Multiclass Label Logic ======================
+        if label_strategy == "multiclass":
+            # y_df['y'] from SQL is 1 if delta >= threshold (and ratio check skipped), 0 otherwise.
+            # We need to split y=1 into classes based on ratio_buckets.
+            # Class 0: y=0 (delta < threshold)
+            # Class 1: y=1 and ratio < bucket[0]
+            # Class 2: y=1 and bucket[0] <= ratio < bucket[1]
+            # ...
+            # Class N: y=1 and ratio >= bucket[-1]
+            
+            buckets = label_params.get("ratio_buckets", [])
+            if not buckets:
+                raise ValueError("Strategy 'multiclass' requires 'ratio_buckets' in label_params")
+            
+            print(f"[DEBUG] Multiclass Buckets: {buckets}")
+            # Check max_raw_ratio stats for y=1
+            y1_ratios = df.loc[df["y"]==1, "max_raw_ratio"]
+            print(f"[DEBUG] y=1 max_raw_ratio stats:\n{y1_ratios.describe()}")
+            
+            def assign_class(row):
+                # If y is 0 or NaN (no data), it's Class 0
+                if pd.isna(row["y"]) or row["y"] == 0:
+                    return 0
+                # y=1, check ratio
+                ratio = row["max_raw_ratio"]
+                # If ratio is NaN (e.g. prev_sales=0), it implies infinite growth -> Highest Class
+                if pd.isna(ratio):
+                    return len(buckets) + 1
+                
+                for i, b in enumerate(buckets):
+                    if ratio < b:
+                        return i + 1
+                return len(buckets) + 1
+            
+            # Ensure max_raw_ratio is available (it should be because we forced return_meta_details=True)
+            if "max_raw_ratio" not in df.columns:
+                 # Try to merge from y_df if not already merged (dense merge might not include it if not in dense sql)
+                 # Actually y_df has it.
+                 pass
+
+            df["y"] = df.apply(assign_class, axis=1)
+
         df["y"] = df["y"].fillna(0).astype(int)
 
         # ====================== Keyword 篩選邏輯 ======================
