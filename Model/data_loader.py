@@ -651,7 +651,11 @@ def load_product_level_training_set(
             MAX(CASE WHEN reply_content IS NOT NULL AND reply_content <> '' THEN 1 ELSE 0 END) AS has_reply_content,
             AVG(score::float) FILTER (WHERE score IS NOT NULL) AS score_mean,
             SUM(like_count::int) FILTER (WHERE like_count IS NOT NULL) AS like_count_sum,
-            COUNT(*) AS comment_count_pre
+            COUNT(*) AS comment_count_pre,
+            -- Temporal Features
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '7 days') AS comment_count_7d,
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_count_30d,
+            EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(capture_time))) / 86400.0 AS days_since_last_comment
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -731,6 +735,9 @@ def load_product_level_training_set(
           COALESCE(m.score_mean,0) AS score_mean,
           COALESCE(m.like_count_sum,0) AS like_count_sum,
           COALESCE(m.comment_count_pre,0) AS comment_count_pre,
+          COALESCE(m.comment_count_7d,0) AS comment_count_7d,
+          COALESCE(m.comment_count_30d,0) AS comment_count_30d,
+          COALESCE(m.days_since_last_comment, 365) AS days_since_last_comment,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -739,6 +746,28 @@ def load_product_level_training_set(
         WHERE p.id <> ALL(%(excluded)s)
         """
         dense = pd.read_sql(sql_dense, conn, params=params)
+
+        # Fillna for dense features
+        dense_cols = [
+            "price", "comment_count_pre", "score_mean", "like_count_sum",
+            "comment_count_7d", "comment_count_30d", "days_since_last_comment",
+            "has_image_urls", "has_video_url", "has_reply_content",
+            "had_any_change_pre", "num_increases_pre"
+        ]
+        for c in dense_cols:
+            if c not in dense.columns:
+                dense[c] = 0
+        
+        dense = dense.fillna(0)
+        
+        # Calculate Ratios
+        # comment_7d_ratio = comment_count_7d / (comment_count_pre + 1)
+        dense["comment_7d_ratio"] = dense["comment_count_7d"] / (dense["comment_count_pre"] + 1)
+        
+        # Handle days_since_last_comment for items with no comments
+        # If comment_count_pre == 0, days_since_last_comment will be 365 (from COALESCE) or 0 (if not matched)
+        # We already handled COALESCE in SQL, but let's be safe
+        dense.loc[dense["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
 
         df = dense.merge(y_df, on="product_id", how="left")
         
@@ -876,7 +905,8 @@ def load_product_level_training_set(
             "price",
             "has_image_urls", "image_urls_count", "has_video_url",
             "has_reply_content", "score_mean", "like_count_sum",
-            "had_any_change_pre", "num_increases_pre", "comment_count_pre"
+            "had_any_change_pre", "num_increases_pre", "comment_count_pre",
+            "comment_count_7d", "comment_count_30d", "days_since_last_comment", "comment_7d_ratio"
         ]
         for c in dense_cols:
             if c not in df.columns:
