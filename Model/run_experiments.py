@@ -98,6 +98,20 @@ def run_experiment(exp_config, output_dir):
         y_train, y_val = y_encoded.iloc[tr_idx], y_encoded.iloc[va_idx]
         
         # Use XGBoost with fixed random_state
+        scale_pos_weight = None
+        if not is_multiclass:
+             use_pos_weight = exp_config.get("params", {}).get("use_pos_weight", False)
+             if use_pos_weight:
+                 # Calculate scale_pos_weight = n_neg / n_pos
+                 # Note: n_pos/n_neg are total counts, but for CV we should ideally use training set counts.
+                 # However, since we use StratifiedKFold, the ratio is preserved.
+                 # We can approximate using the fold's y_train.
+                 n_neg_tr = (y_train == 0).sum()
+                 n_pos_tr = (y_train == 1).sum()
+                 if n_pos_tr > 0:
+                     scale_pos_weight = n_neg_tr / n_pos_tr
+                     print(f"  [Fold {fold}] Applied scale_pos_weight: {scale_pos_weight:.4f}")
+
         if is_multiclass:
             model = XGBClassifier(
                 n_estimators=100,
@@ -118,7 +132,8 @@ def run_experiment(exp_config, output_dir):
                 random_state=42,
                 n_jobs=-1,
                 eval_metric="logloss",
-                use_label_encoder=False
+                use_label_encoder=False,
+                scale_pos_weight=scale_pos_weight
             )
         
         model.fit(X_train, y_train)
@@ -140,6 +155,11 @@ def run_experiment(exp_config, output_dir):
         else:
             # Binary Metrics
             y_prob = model.predict_proba(X_val)[:, 1]
+            
+            # 1. Default Threshold (0.5) Metrics
+            cm = confusion_matrix(y_val, y_pred)
+            print(f"  [Fold {fold}] Confusion Matrix (Th=0.5): TN={cm[0,0]}, FP={cm[0,1]}, FN={cm[1,0]}, TP={cm[1,1]}")
+            
             m = {
                 "accuracy": accuracy_score(y_val, y_pred),
                 "precision": precision_score(y_val, y_pred, zero_division=0),
@@ -148,6 +168,29 @@ def run_experiment(exp_config, output_dir):
                 "pr_auc": average_precision_score(y_val, y_prob),
                 "roc_auc": roc_auc_score(y_val, y_prob)
             }
+            
+            # 2. Threshold Scanning
+            thresholds = np.linspace(0.05, 0.95, 19)
+            best_th = 0.5
+            best_f1 = -1.0
+            best_metrics = {}
+            
+            for th in thresholds:
+                y_pred_th = (y_prob >= th).astype(int)
+                f1_th = f1_score(y_val, y_pred_th, zero_division=0)
+                if f1_th > best_f1:
+                    best_f1 = f1_th
+                    best_th = th
+                    best_metrics = {
+                        "f1_best_th": f1_th,
+                        "precision_best_th": precision_score(y_val, y_pred_th, zero_division=0),
+                        "recall_best_th": recall_score(y_val, y_pred_th, zero_division=0),
+                        "best_threshold": best_th
+                    }
+            
+            # Merge best metrics
+            m.update(best_metrics)
+            
         metrics_list.append(m)
     
     # Average Metrics
