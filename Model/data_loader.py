@@ -655,7 +655,14 @@ def load_product_level_training_set(
             -- Temporal Features
             COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '7 days') AS comment_count_7d,
             COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_count_30d,
-            EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(capture_time))) / 86400.0 AS days_since_last_comment
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS comment_count_90d,
+            EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(capture_time))) / 86400.0 AS days_since_last_comment,
+            -- Content Features (Recent 90 Days)
+            AVG(score::float) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS sentiment_mean_recent,
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND score <= 2) AS neg_count_recent,
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND comment_text ~ '促銷|特價|打折|滿額|免運|團購') AS promo_count_recent,
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆') AS repurchase_count_recent
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -737,7 +744,13 @@ def load_product_level_training_set(
           COALESCE(m.comment_count_pre,0) AS comment_count_pre,
           COALESCE(m.comment_count_7d,0) AS comment_count_7d,
           COALESCE(m.comment_count_30d,0) AS comment_count_30d,
+          COALESCE(m.comment_count_90d,0) AS comment_count_90d,
           COALESCE(m.days_since_last_comment, 365) AS days_since_last_comment,
+          COALESCE(m.sentiment_mean_recent, 3.0) AS sentiment_mean_recent, -- Default to neutral 3.0 if no recent comments
+          COALESCE(m.pos_count_recent,0) AS pos_count_recent,
+          COALESCE(m.neg_count_recent,0) AS neg_count_recent,
+          COALESCE(m.promo_count_recent,0) AS promo_count_recent,
+          COALESCE(m.repurchase_count_recent,0) AS repurchase_count_recent,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -750,7 +763,9 @@ def load_product_level_training_set(
         # Fillna for dense features
         dense_cols = [
             "price", "comment_count_pre", "score_mean", "like_count_sum",
-            "comment_count_7d", "comment_count_30d", "days_since_last_comment",
+            "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment",
+            "sentiment_mean_recent", "pos_count_recent", "neg_count_recent",
+            "promo_count_recent", "repurchase_count_recent",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre"
         ]
@@ -763,6 +778,13 @@ def load_product_level_training_set(
         # Calculate Ratios
         # comment_7d_ratio = comment_count_7d / (comment_count_pre + 1)
         dense["comment_7d_ratio"] = dense["comment_count_7d"] / (dense["comment_count_pre"] + 1)
+        
+        # Content Ratios
+        # Use comment_count_90d as denominator for recent features
+        # Add 1 to denominator to avoid division by zero
+        dense["neg_ratio_recent"] = dense["neg_count_recent"] / (dense["comment_count_90d"] + 1)
+        dense["promo_ratio_recent"] = dense["promo_count_recent"] / (dense["comment_count_90d"] + 1)
+        dense["repurchase_ratio_recent"] = dense["repurchase_count_recent"] / (dense["comment_count_90d"] + 1)
         
         # Handle days_since_last_comment for items with no comments
         # If comment_count_pre == 0, days_since_last_comment will be 365 (from COALESCE) or 0 (if not matched)
@@ -906,7 +928,8 @@ def load_product_level_training_set(
             "has_image_urls", "image_urls_count", "has_video_url",
             "has_reply_content", "score_mean", "like_count_sum",
             "had_any_change_pre", "num_increases_pre", "comment_count_pre",
-            "comment_count_7d", "comment_count_30d", "days_since_last_comment", "comment_7d_ratio"
+            "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
+            "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
         ]
         for c in dense_cols:
             if c not in df.columns:

@@ -212,7 +212,8 @@ def run_experiment(exp_config, output_dir):
                     "price", "comment_count_pre", "score_mean", "like_count_sum", 
                     "had_any_change_pre", "num_increases_pre", 
                     "has_image_urls", "has_video_url", "has_reply_content",
-                    "comment_count_7d", "comment_count_30d", "days_since_last_comment", "comment_7d_ratio"
+                    "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
+                    "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
                 ]
                 for c in cols_to_add:
                     if c in X_dense_val.columns:
