@@ -1,5 +1,17 @@
 # Hybrid Strict Dropped Samples Analysis
 
+## 檔案說明
+
+- **對應實驗**：`hybrid_strict`（Label Strategy = hybrid, delta=10, ratio>=0.3）。
+- **目的**：分析在 strict 條件下，哪些原本在 baseline_v1 中被視為「成長」的樣本，因為比例門檻未達 0.3 而被重新標為 0（Dropped Samples），並檢視這些樣本的特性。
+- **內容包含**：
+  - 各實驗版本的樣本數與 Pos/Neg 分布比較（Overview）。
+  - 對於被 hybrid_strict 剔除的樣本（Dropped Samples），統計其 `max_raw_delta`、`max_raw_ratio` 等特徵分布。
+- **用法**：
+  - 協助理解為什麼要採用 hybrid_strict 策略。
+  - 確認被刪除的樣本是否確實為「高基數、低比例」的非顯著成長商品（符合預期）。
+
+
 ## Overview
 - **Baseline Positives:** 464
 - **Dropped by Strict (Ratio<0.3):** 27

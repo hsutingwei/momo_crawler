@@ -1,5 +1,23 @@
 # Binary Explosive Error Analysis
 
+## 檔案說明
+
+- **對應實驗**：`binary_explosive`（爆品 vs 非爆品 的二元分類任務）。
+- **目的**：針對爆品預測任務做深入錯誤分析，了解模型表現與特徵分布差異。
+- **內容包含**：
+  - **Category Distribution**：TP / FP / FN / TN 四種樣本的數量與比例。
+  - **Feature Comparison**：比較四種樣本在關鍵特徵上的統計值（Mean / Median / Std），特徵包含：
+    - 靜態特徵：`price`, `comment_count_pre`, `score_mean` 等。
+    - 時間特徵：`days_since_last_comment`, `comment_count_90d` 等。
+    - 內容特徵：`sentiment_mean_recent`, `repurchase_ratio_recent` 等。
+- **資料來源**：
+  - 本報告由 `analyze_binary_errors.py` 自動產生。
+  - **原始資料**：若需要逐樣本的詳細預測與特徵資料，請參考同資料夾下的 `binary_explosive_error_analysis.csv` 與其說明檔 `binary_explosive_error_analysis_csv_readme.md`。
+- **用法**：
+  - 理解模型「抓到了哪些爆品（TP）」、「漏掉了哪些（FN）」以及「誤判了什麼（FP）」。
+  - 觀察特徵分布差異（如 Recency, Sentiment），作為後續特徵工程的依據。
+
+
 **Total Samples:** 7197
 **Best Threshold Used:** 0.6500
 

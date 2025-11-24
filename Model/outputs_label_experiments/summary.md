@@ -1,5 +1,25 @@
 # Label Experiment Results
 
+## 檔案說明
+
+- **用途**：彙總本專案中各個實驗版本的整體表現指標，是「實驗結果的總覽表」。
+- **內容結構**：
+  - 每一列對應一個實驗設定（Experiment），涵蓋：
+    - 二元成長任務：`baseline_v1`, `hybrid_relaxed`, `hybrid_strict`
+    - 多類別成長任務：`multiclass_percentile`
+    - 爆品預測任務：`binary_explosive`
+- **主要欄位說明**：
+  - `pos_rate`：正類樣本比例。
+  - `accuracy`：整體準確率。
+  - `pr_auc` / `roc_auc`：PR-AUC 與 ROC-AUC 指標。
+  - `best_threshold`：在 Validation Set 上得到最佳 F1 Score 的機率閾值。
+  - `precision_best_th` / `recall_best_th` / `f1_best_th`：在該最佳閾值下的 Precision / Recall / F1 Score。
+  - `f1_class3` 等：針對多類別任務中特定類別（如 Class 3 爆品）的指標。
+- **用法**：
+  - 快速比較不同 label 設計與特徵組合（如 v1/v2/v3）之間的效果差異。
+  - 作為選擇「哪一版模型值得深入分析」的入口。
+
+
 | experiment | n_samples | n_pos | n_neg | pos_rate | status | accuracy | precision | recall | f1 | pr_auc | roc_auc | f1_best_th | precision_best_th | recall_best_th | best_threshold | f1_macro | f1_weighted | f1_class3 | precision_class3 | recall_class3 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | baseline_v1 | 7197 | 464 | 6733 | 0.06447130748923162 | completed | 0.9358066944637479 | 0.35 | 0.008672276764843384 | 0.01675531914893617 | 0.16830410399602155 | 0.7448511669597142 | 0.2354373545027427 | 0.16780794434985663 | 0.4182795698924731 | 0.10999999999999999 | nan | nan | nan | nan | nan |
