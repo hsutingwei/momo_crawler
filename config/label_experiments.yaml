@@ -16,6 +16,27 @@ experiments:
       delta_threshold: 10
       ratio_threshold: 0.3
 
+  # === Balanced Control Experiments (Phase 1 + Class Weight) ===
+  - name: "baseline_v1_balanced"
+    strategy: "absolute"
+    params:
+      delta_threshold: 10
+      use_pos_weight: true
+
+  - name: "hybrid_relaxed_balanced"
+    strategy: "hybrid"
+    params:
+      delta_threshold: 10
+      ratio_threshold: 0.1
+      use_pos_weight: true
+
+  - name: "hybrid_strict_balanced"
+    strategy: "hybrid"
+    params:
+      delta_threshold: 10
+      ratio_threshold: 0.3
+      use_pos_weight: true
+
   - name: "multiclass_percentile"
     strategy: "multiclass"
     params:
