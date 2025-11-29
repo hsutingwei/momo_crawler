@@ -3,18 +3,27 @@ experiments:
     strategy: "absolute"
     params:
       delta_threshold: 10
+    train_settings:
+      use_class_weight: false
+      do_threshold_search: false
       
   - name: "hybrid_relaxed"
     strategy: "hybrid"
     params:
       delta_threshold: 10
       ratio_threshold: 0.1
+    train_settings:
+      use_class_weight: false
+      do_threshold_search: false
       
   - name: "hybrid_strict"
     strategy: "hybrid"
     params:
       delta_threshold: 10
       ratio_threshold: 0.3
+    train_settings:
+      use_class_weight: false
+      do_threshold_search: false
 
   # === Balanced Control Experiments (Phase 1 + Class Weight) ===
   - name: "baseline_v1_balanced"
@@ -22,6 +31,9 @@ experiments:
     params:
       delta_threshold: 10
       use_pos_weight: true
+    train_settings:
+      use_class_weight: true
+      do_threshold_search: true
 
   - name: "hybrid_relaxed_balanced"
     strategy: "hybrid"
@@ -29,6 +41,9 @@ experiments:
       delta_threshold: 10
       ratio_threshold: 0.1
       use_pos_weight: true
+    train_settings:
+      use_class_weight: true
+      do_threshold_search: true
 
   - name: "hybrid_strict_balanced"
     strategy: "hybrid"
@@ -36,6 +51,9 @@ experiments:
       delta_threshold: 10
       ratio_threshold: 0.3
       use_pos_weight: true
+    train_settings:
+      use_class_weight: true
+      do_threshold_search: true
 
   - name: "multiclass_percentile"
     strategy: "multiclass"
@@ -49,3 +67,7 @@ experiments:
       delta_threshold: 10
       ratio_threshold: 1.0
       use_pos_weight: true
+    train_settings:
+      use_class_weight: true
+      do_threshold_search: true
+

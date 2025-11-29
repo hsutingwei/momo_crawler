@@ -35,6 +35,17 @@ def run_experiment(exp_config, output_dir):
     print(f"Strategy: {exp_config['strategy']}")
     print(f"Params: {exp_config['params']}")
     
+    # Get Train Settings
+    train_settings = exp_config.get("train_settings", {})
+    use_class_weight = train_settings.get("use_class_weight", False)
+    do_threshold_search = train_settings.get("do_threshold_search", False)
+    
+    # Backward compatibility for binary_explosive if train_settings not present but params has it
+    if "use_pos_weight" in exp_config["params"]:
+         use_class_weight = exp_config["params"]["use_pos_weight"]
+
+    print(f"Settings: use_class_weight={use_class_weight}, do_threshold_search={do_threshold_search}")
+
     # 1. Load Data
     # Use fixed parameters for other args to ensure fair comparison
     # Assuming these match the current production settings or reasonable defaults
@@ -100,18 +111,16 @@ def run_experiment(exp_config, output_dir):
         
         # Use XGBoost with fixed random_state
         scale_pos_weight = None
-        if not is_multiclass:
-             use_pos_weight = exp_config.get("params", {}).get("use_pos_weight", False)
-             if use_pos_weight:
-                 # Calculate scale_pos_weight = n_neg / n_pos
-                 # Note: n_pos/n_neg are total counts, but for CV we should ideally use training set counts.
-                 # However, since we use StratifiedKFold, the ratio is preserved.
-                 # We can approximate using the fold's y_train.
-                 n_neg_tr = (y_train == 0).sum()
-                 n_pos_tr = (y_train == 1).sum()
-                 if n_pos_tr > 0:
-                     scale_pos_weight = n_neg_tr / n_pos_tr
-                     print(f"  [Fold {fold}] Applied scale_pos_weight: {scale_pos_weight:.4f}")
+        if not is_multiclass and use_class_weight:
+             # Calculate scale_pos_weight = n_neg / n_pos
+             # Note: n_pos/n_neg are total counts, but for CV we should ideally use training set counts.
+             # However, since we use StratifiedKFold, the ratio is preserved.
+             # We can approximate using the fold's y_train.
+             n_neg_tr = (y_train == 0).sum()
+             n_pos_tr = (y_train == 1).sum()
+             if n_pos_tr > 0:
+                 scale_pos_weight = n_neg_tr / n_pos_tr
+                 print(f"  [Fold {fold}] Applied scale_pos_weight: {scale_pos_weight:.4f}")
 
         if is_multiclass:
             model = XGBClassifier(
@@ -170,30 +179,31 @@ def run_experiment(exp_config, output_dir):
                 "roc_auc": roc_auc_score(y_val, y_prob)
             }
             
-            # 2. Threshold Scanning
-            thresholds = np.linspace(0.05, 0.95, 19)
-            best_th = 0.5
-            best_f1 = -1.0
+            # 2. Threshold Scanning (if enabled)
             best_metrics = {}
+            if do_threshold_search:
+                thresholds = np.linspace(0.05, 0.95, 19)
+                best_th = 0.5
+                best_f1 = -1.0
+                
+                for th in thresholds:
+                    y_pred_th = (y_prob >= th).astype(int)
+                    f1_th = f1_score(y_val, y_pred_th, zero_division=0)
+                    if f1_th > best_f1:
+                        best_f1 = f1_th
+                        best_th = th
+                        best_metrics = {
+                            "f1_best_th": f1_th,
+                            "precision_best_th": precision_score(y_val, y_pred_th, zero_division=0),
+                            "recall_best_th": recall_score(y_val, y_pred_th, zero_division=0),
+                            "best_threshold": best_th
+                        }
+                # Merge best metrics
+                m.update(best_metrics)
             
-            for th in thresholds:
-                y_pred_th = (y_prob >= th).astype(int)
-                f1_th = f1_score(y_val, y_pred_th, zero_division=0)
-                if f1_th > best_f1:
-                    best_f1 = f1_th
-                    best_th = th
-                    best_metrics = {
-                        "f1_best_th": f1_th,
-                        "precision_best_th": precision_score(y_val, y_pred_th, zero_division=0),
-                        "recall_best_th": recall_score(y_val, y_pred_th, zero_division=0),
-                        "best_threshold": best_th
-                    }
-            
-            # Merge best metrics
-            m.update(best_metrics)
-            
-            # For binary_explosive, collect data for error analysis
-            if exp_config['name'] == 'binary_explosive':
+            # Collect data for error analysis if threshold search is enabled (implies we care about detailed analysis)
+            # OR if it's explicitly one of our target experiments
+            if do_threshold_search:
                 # Get validation meta and dense features
                 meta_val = meta.iloc[va_idx].reset_index(drop=True)
                 X_dense_val = X_dense_df.iloc[va_idx].reset_index(drop=True)
@@ -206,8 +216,6 @@ def run_experiment(exp_config, output_dir):
                 })
                 
                 # Add dense features
-                # We only add the ones requested for analysis to keep it light, or all dense features
-                # User requested: price, comment_count_pre, score_mean, like_count_sum, had_any_change_pre, num_increases_pre, media flags
                 cols_to_add = [
                     "price", "comment_count_pre", "score_mean", "like_count_sum", 
                     "had_any_change_pre", "num_increases_pre", 
@@ -215,6 +223,13 @@ def run_experiment(exp_config, output_dir):
                     "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
                     "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
                 ]
+                
+                # Also add max_raw_delta / max_raw_ratio if available in meta
+                if "max_raw_delta" in meta_val.columns:
+                    fold_df["max_raw_delta"] = meta_val["max_raw_delta"]
+                if "max_raw_ratio" in meta_val.columns:
+                    fold_df["max_raw_ratio"] = meta_val["max_raw_ratio"]
+
                 for c in cols_to_add:
                     if c in X_dense_val.columns:
                         fold_df[c] = X_dense_val[c]
@@ -223,8 +238,8 @@ def run_experiment(exp_config, output_dir):
 
         metrics_list.append(m)
     
-    # Save Error Analysis CSV if applicable
-    if exp_config['name'] == 'binary_explosive' and error_analysis_rows:
+    # Save Prediction CSV if applicable (for experiments with threshold search)
+    if do_threshold_search and error_analysis_rows:
         full_error_df = pd.concat(error_analysis_rows, ignore_index=True)
         
         # Calculate best threshold on the full dataset
@@ -242,12 +257,18 @@ def run_experiment(exp_config, output_dir):
         full_error_df["y_pred_best"] = (full_error_df["y_prob"] >= best_th_full).astype(int)
         full_error_df["best_threshold_used"] = best_th_full
         
-        out_csv = os.path.join(output_dir, "binary_explosive_error_analysis.csv")
+        # Save CSV with experiment name
+        out_csv = os.path.join(output_dir, f"preds_{exp_config['name']}.csv")
         full_error_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
-        print(f"Saved error analysis data to {out_csv} (Best Th: {best_th_full:.4f})")
+        print(f"Saved predictions to {out_csv} (Best Th: {best_th_full:.4f})")
+        
+        # Also save as binary_explosive_error_analysis.csv for backward compatibility if needed
+        if exp_config['name'] == 'binary_explosive':
+             legacy_csv = os.path.join(output_dir, "binary_explosive_error_analysis.csv")
+             full_error_df.to_csv(legacy_csv, index=False, encoding="utf-8-sig")
 
     # Average Metrics
-    avg_metrics = {k: float(np.mean([m[k] for m in metrics_list])) for k in metrics_list[0].keys()}
+    avg_metrics = {k: float(np.mean([m.get(k, np.nan) for m in metrics_list])) for k in metrics_list[0].keys()}
     
     result = {
         "experiment": exp_config['name'],
@@ -261,7 +282,8 @@ def run_experiment(exp_config, output_dir):
     
     print("Average Metrics:")
     for k, v in avg_metrics.items():
-        print(f"  {k}: {v:.4f}")
+        if not np.isnan(v):
+            print(f"  {k}: {v:.4f}")
         
     return result
 
