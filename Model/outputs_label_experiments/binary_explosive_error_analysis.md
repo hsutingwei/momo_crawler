@@ -279,3 +279,33 @@ days_since_last_comment、sentiment_mean_recent（排 TN）、再搭配一些互
 
 ### 有趣但需要更細建模的特徵：
 promo_ratio_recent、repurchase_ratio_recent —— 特別提醒「回購型爆品」這一塊。
+
+
+## Temporal Trend Features (90-day window)
+
+在此次實驗中，我們加入了 90 天內的三段式評論數統計與加速比率特徵，以捕捉爆發前的趨勢：
+
+- **comment_3rd_30d**: 最近 30 天 (0-30 days before cutoff)
+- **comment_2nd_30d**: 中間 30 天 (31-60 days before cutoff)
+- **comment_1st_30d**: 最早 30 天 (61-90 days before cutoff)
+- **ratio_recent30_to_prev60**: 加速比率 = `comment_3rd_30d / (comment_1st_30d + comment_2nd_30d + 1e-6)`
+
+### 特徵平均值比較 (Mean Values by Group)
+
+| group   |   comment_1st_30d |   comment_2nd_30d |   comment_3rd_30d |   ratio_recent30_to_prev60 |
+|:--------|------------------:|------------------:|------------------:|---------------------------:|
+| TP      |                 0 |           6.17742 |                 0 |                          0 |
+| FN      |                 0 |          18.0263  |                 0 |                          0 |
+| FP      |                 0 |           5.39935 |                 0 |                          0 |
+| TN      |                 0 |          15.6191  |                 0 |                          0 |
+
+### 初步觀察結論
+
+- **無明顯加速特徵**：TP 的加速比率 (0.00) 並未高於 TN (0.00)。
+
+> [!WARNING]
+> **資料新鮮度異常**：
+> 觀察到 `comment_3rd_30d` (最近 30 天) 與 `comment_count_7d` 均為 0，且 `days_since_last_comment` 中位數約 40 天。
+> 這顯示在 cutoff 日期 (2025-06-25) 前的 30 天內，資料庫中幾乎沒有新評論。
+> 這導致 `ratio_recent30_to_prev60` 分子為 0，無法計算出有效的加速趨勢。
+> 建議檢查爬蟲資料的最新時間，或調整 cutoff 日期以貼近資料實際時間。

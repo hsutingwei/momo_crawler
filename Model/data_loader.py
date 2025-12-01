@@ -657,6 +657,15 @@ def load_product_level_training_set(
             COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_count_30d,
             COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS comment_count_90d,
             EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(capture_time))) / 86400.0 AS days_since_last_comment,
+            -- Temporal Trend Features (90-day segmented windows)
+            -- comment_3rd_30d: 0-30 days before cutoff (Recent)
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_3rd_30d,
+            -- comment_2nd_30d: 31-60 days before cutoff
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '60 days' 
+                               AND capture_time < %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_2nd_30d,
+            -- comment_1st_30d: 61-90 days before cutoff
+            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' 
+                               AND capture_time < %(cutoff)s::timestamp - INTERVAL '60 days') AS comment_1st_30d,
             -- Content Features (Recent 90 Days)
             AVG(score::float) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS sentiment_mean_recent,
             COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
@@ -745,6 +754,9 @@ def load_product_level_training_set(
           COALESCE(m.comment_count_7d,0) AS comment_count_7d,
           COALESCE(m.comment_count_30d,0) AS comment_count_30d,
           COALESCE(m.comment_count_90d,0) AS comment_count_90d,
+          COALESCE(m.comment_1st_30d,0) AS comment_1st_30d,
+          COALESCE(m.comment_2nd_30d,0) AS comment_2nd_30d,
+          COALESCE(m.comment_3rd_30d,0) AS comment_3rd_30d,
           COALESCE(m.days_since_last_comment, 365) AS days_since_last_comment,
           COALESCE(m.sentiment_mean_recent, 3.0) AS sentiment_mean_recent, -- Default to neutral 3.0 if no recent comments
           COALESCE(m.pos_count_recent,0) AS pos_count_recent,
@@ -764,6 +776,7 @@ def load_product_level_training_set(
         dense_cols = [
             "price", "comment_count_pre", "score_mean", "like_count_sum",
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment",
+            "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d",
             "sentiment_mean_recent", "pos_count_recent", "neg_count_recent",
             "promo_count_recent", "repurchase_count_recent",
             "has_image_urls", "has_video_url", "has_reply_content",
@@ -779,6 +792,10 @@ def load_product_level_training_set(
         # comment_7d_ratio = comment_count_7d / (comment_count_pre + 1)
         dense["comment_7d_ratio"] = dense["comment_count_7d"] / (dense["comment_count_pre"] + 1)
         
+        # Temporal Trend Ratio: Recent 30d vs Previous 60d
+        # ratio_recent30_to_prev60 = comment_3rd_30d / (comment_1st_30d + comment_2nd_30d + 1e-6)
+        dense["ratio_recent30_to_prev60"] = dense["comment_3rd_30d"] / (dense["comment_1st_30d"] + dense["comment_2nd_30d"] + 1e-6)
+
         # Content Ratios
         # Use comment_count_90d as denominator for recent features
         # Add 1 to denominator to avoid division by zero
@@ -929,6 +946,7 @@ def load_product_level_training_set(
             "has_reply_content", "score_mean", "like_count_sum",
             "had_any_change_pre", "num_increases_pre", "comment_count_pre",
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
+            "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
         ]
         for c in dense_cols:

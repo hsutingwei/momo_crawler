@@ -1,49 +1,49 @@
 experiments:
-  - name: "baseline_v1"
-    strategy: "absolute"
-    params:
-      delta_threshold: 10
-    train_settings:
-      use_class_weight: false
-      do_threshold_search: false
+  # - name: "baseline_v1"
+  #   strategy: "absolute"
+  #   params:
+  #     delta_threshold: 10
+  #   train_settings:
+  #     use_class_weight: false
+  #     do_threshold_search: false
       
-  - name: "hybrid_relaxed"
-    strategy: "hybrid"
-    params:
-      delta_threshold: 10
-      ratio_threshold: 0.1
-    train_settings:
-      use_class_weight: false
-      do_threshold_search: false
+  # - name: "hybrid_relaxed"
+  #   strategy: "hybrid"
+  #   params:
+  #     delta_threshold: 10
+  #     ratio_threshold: 0.1
+  #   train_settings:
+  #     use_class_weight: false
+  #     do_threshold_search: false
       
-  - name: "hybrid_strict"
-    strategy: "hybrid"
-    params:
-      delta_threshold: 10
-      ratio_threshold: 0.3
-    train_settings:
-      use_class_weight: false
-      do_threshold_search: false
+  # - name: "hybrid_strict"
+  #   strategy: "hybrid"
+  #   params:
+  #     delta_threshold: 10
+  #     ratio_threshold: 0.3
+  #   train_settings:
+  #     use_class_weight: false
+  #     do_threshold_search: false
 
   # === Balanced Control Experiments (Phase 1 + Class Weight) ===
-  - name: "baseline_v1_balanced"
-    strategy: "absolute"
-    params:
-      delta_threshold: 10
-      use_pos_weight: true
-    train_settings:
-      use_class_weight: true
-      do_threshold_search: true
+  # - name: "baseline_v1_balanced"
+  #   strategy: "absolute"
+  #   params:
+  #     delta_threshold: 10
+  #     use_pos_weight: true
+  #   train_settings:
+  #     use_class_weight: true
+  #     do_threshold_search: true
 
-  - name: "hybrid_relaxed_balanced"
-    strategy: "hybrid"
-    params:
-      delta_threshold: 10
-      ratio_threshold: 0.1
-      use_pos_weight: true
-    train_settings:
-      use_class_weight: true
-      do_threshold_search: true
+  # - name: "hybrid_relaxed_balanced"
+  #   strategy: "hybrid"
+  #   params:
+  #     delta_threshold: 10
+  #     ratio_threshold: 0.1
+  #     use_pos_weight: true
+  #   train_settings:
+  #     use_class_weight: true
+  #     do_threshold_search: true
 
   - name: "hybrid_strict_balanced"
     strategy: "hybrid"
@@ -55,11 +55,11 @@ experiments:
       use_class_weight: true
       do_threshold_search: true
 
-  - name: "multiclass_percentile"
-    strategy: "multiclass"
-    params:
-      delta_threshold: 10
-      ratio_buckets: [0.67, 1.0]
+  # - name: "multiclass_percentile"
+  #   strategy: "multiclass"
+  #   params:
+  #     delta_threshold: 10
+  #     ratio_buckets: [0.67, 1.0]
 
   - name: "binary_explosive"
     strategy: "hybrid"
