@@ -222,7 +222,8 @@ def run_experiment(exp_config, output_dir):
                     "has_image_urls", "has_video_url", "has_reply_content",
                     "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
                     "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
-                    "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
+                    "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
+                    "arousal_ratio", "novelty_ratio", "intensity_score"
                 ]
                 
                 # Also add max_raw_delta / max_raw_ratio if available in meta

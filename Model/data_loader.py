@@ -673,7 +673,11 @@ def load_product_level_training_set(
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score <= 2) AS neg_count_recent,
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '促銷|特價|打折|滿額|免運|團購') AS promo_count_recent,
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆') AS repurchase_count_recent
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆|再次購買|忠實|買過') AS repurchase_count_recent,
+            -- Arousal Keywords (High Energy/Surprise)
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '驚豔|嚇到|太神|誇張|只有扯|必須推|！！！|！！|？？？|？？') AS arousal_count_recent,
+            -- Novelty Keywords (First-time/Discovery)
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '第一次買|觀望很久|終於下手|相見恨晚|抱著試試看|初次') AS novelty_count_recent
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -760,11 +764,13 @@ def load_product_level_training_set(
           COALESCE(m.comment_2nd_30d,0) AS comment_2nd_30d,
           COALESCE(m.comment_3rd_30d,0) AS comment_3rd_30d,
           COALESCE(m.days_since_last_comment, 365) AS days_since_last_comment,
-          COALESCE(m.sentiment_mean_recent, 3.0) AS sentiment_mean_recent, -- Default to neutral 3.0 if no recent comments
+          COALESCE(m.sentiment_mean_recent, 3.0) AS sentiment_mean_recent,
           COALESCE(m.pos_count_recent,0) AS pos_count_recent,
           COALESCE(m.neg_count_recent,0) AS neg_count_recent,
           COALESCE(m.promo_count_recent,0) AS promo_count_recent,
           COALESCE(m.repurchase_count_recent,0) AS repurchase_count_recent,
+          COALESCE(m.arousal_count_recent,0) AS arousal_count_recent,
+          COALESCE(m.novelty_count_recent,0) AS novelty_count_recent,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -777,13 +783,14 @@ def load_product_level_training_set(
         # Fillna for dense features
         dense_cols = [
             "price", "comment_count_pre", "score_mean", "like_count_sum",
-            "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment",
-            "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d",
-            "sentiment_mean_recent", "pos_count_recent", "neg_count_recent",
-            "promo_count_recent", "repurchase_count_recent",
+            "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
+            "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
+            "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
+            "arousal_ratio", "novelty_ratio", "intensity_score",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre"
         ]
+        
         for c in dense_cols:
             if c not in dense.columns:
                 dense[c] = 0
@@ -791,23 +798,23 @@ def load_product_level_training_set(
         dense = dense.fillna(0)
         
         # Calculate Ratios
-        # comment_7d_ratio = comment_count_7d / (comment_count_pre + 1)
         dense["comment_7d_ratio"] = dense["comment_count_7d"] / (dense["comment_count_pre"] + 1)
-        
-        # Temporal Trend Ratio: Recent 30d vs Previous 60d
-        # ratio_recent30_to_prev60 = comment_3rd_30d / (comment_1st_30d + comment_2nd_30d + 1e-6)
         dense["ratio_recent30_to_prev60"] = dense["comment_3rd_30d"] / (dense["comment_1st_30d"] + dense["comment_2nd_30d"] + 1e-6)
 
         # Content Ratios
-        # Use comment_count_90d as denominator for recent features
-        # Add 1 to denominator to avoid division by zero
-        dense["neg_ratio_recent"] = dense["neg_count_recent"] / (dense["comment_count_90d"] + 1)
-        dense["promo_ratio_recent"] = dense["promo_count_recent"] / (dense["comment_count_90d"] + 1)
-        dense["repurchase_ratio_recent"] = dense["repurchase_count_recent"] / (dense["comment_count_90d"] + 1)
+        denom = dense["comment_count_90d"] + 1
+        dense["neg_ratio_recent"] = dense["neg_count_recent"] / denom
+        dense["promo_ratio_recent"] = dense["promo_count_recent"] / denom
+        dense["repurchase_ratio_recent"] = dense["repurchase_count_recent"] / denom
+        
+        # Arousal & Novelty Ratios
+        dense["arousal_ratio"] = dense["arousal_count_recent"] / denom
+        dense["novelty_ratio"] = dense["novelty_count_recent"] / denom
+        
+        # Intensity Score
+        dense["intensity_score"] = (dense["arousal_ratio"] + dense["novelty_ratio"]) / (dense["repurchase_ratio_recent"] + 0.1)
         
         # Handle days_since_last_comment for items with no comments
-        # If comment_count_pre == 0, days_since_last_comment will be 365 (from COALESCE) or 0 (if not matched)
-        # We already handled COALESCE in SQL, but let's be safe
         dense.loc[dense["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
 
         df = dense.merge(y_df, on="product_id", how="left")
@@ -949,7 +956,8 @@ def load_product_level_training_set(
             "had_any_change_pre", "num_increases_pre", "comment_count_pre",
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
-            "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent"
+            "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
+            "arousal_ratio", "novelty_ratio", "intensity_score"
         ]
         for c in dense_cols:
             if c not in df.columns:
