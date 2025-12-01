@@ -12,7 +12,8 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     df.loc[(df["y_true"]==0) & (df["y_pred_best"]==1), "group"] = "FP"
     
     features = [
-        "arousal_ratio", "novelty_ratio", "intensity_score", "repurchase_ratio_recent"
+        "arousal_ratio", "novelty_ratio", "intensity_score", "repurchase_ratio_recent",
+        "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
     ]
     
     # Calculate mean for each group
@@ -23,39 +24,44 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     stats = stats.reindex([g for g in desired_order if g in stats.index])
     
     md_content = f"""
-## Arousal & Novelty Analysis (Emotional Intensity)
+## Interaction Features Analysis (Cross Features)
 
-為了區分「穩定熱銷 (Sustained Hits)」與「爆發新品 (Viral Hits)」，我們引入了情緒強度特徵：
+為了進一步區分雜訊與真實爆發，我們引入了交互特徵：
 
-- **arousal_ratio**: 驚嘆、誇張、強烈情緒關鍵字比例 (e.g. 驚豔, 太神, 扯)。
-- **novelty_ratio**: 初次體驗、觀望很久關鍵字比例 (e.g. 第一次買, 終於下手)。
-- **intensity_score**: 複合指標 = `(arousal + novelty) / (repurchase + 0.1)`。設計用來獎勵高情緒/新奇，懲罰無聊的回購。
+- **validated_velocity**: `Acceleration * log1p(Volume)`。確認高成長是否由足夠的評論量支撐。
+- **price_weighted_arousal**: `Arousal * log1p(Price)`。區分「廉價炒作 (FP)」與「高價驚豔 (TP)」。
+- **novelty_momentum**: `Acceleration * (1 - Repurchase)`。確認成長動力來自「新客」而非「回購」。
+- **is_mature_product**: 標記是否為成熟商品 (高累積評論或高回購)。
 
 ### 特徵平均值比較 (Mean Values by Group)
 
 {stats.to_markdown()}
 
-### 初步觀察結論
+### 深入觀察結論
 
 """
     
     # Automated insights
     try:
-        tp_intensity = stats.loc["TP", "intensity_score"] if "TP" in stats.index else 0
-        tn_intensity = stats.loc["TN", "intensity_score"] if "TN" in stats.index else 0
-        fn_intensity = stats.loc["FN", "intensity_score"] if "FN" in stats.index else 0
-        fp_intensity = stats.loc["FP", "intensity_score"] if "FP" in stats.index else 0
+        tp_vv = stats.loc["TP", "validated_velocity"] if "TP" in stats.index else 0
+        fp_vv = stats.loc["FP", "validated_velocity"] if "FP" in stats.index else 0
         
-        if tp_intensity > tn_intensity:
-            md_content += f"- **強度區分有效**：TP 的 Intensity Score ({tp_intensity:.4f}) 高於 TN ({tn_intensity:.4f})，顯示爆品通常帶有較強烈的情緒或新奇感。\n"
+        tp_pwa = stats.loc["TP", "price_weighted_arousal"] if "TP" in stats.index else 0
+        fp_pwa = stats.loc["FP", "price_weighted_arousal"] if "FP" in stats.index else 0
+        
+        tp_nm = stats.loc["TP", "novelty_momentum"] if "TP" in stats.index else 0
+        fn_nm = stats.loc["FN", "novelty_momentum"] if "FN" in stats.index else 0
+
+        if tp_vv > fp_vv:
+            md_content += f"- **速度驗證有效**：TP 的 Validated Velocity ({tp_vv:.4f}) 高於 FP ({fp_vv:.4f})，顯示真爆品通常伴隨更紮實的評論量成長。\n"
+        
+        if tp_pwa > fp_pwa:
+            md_content += f"- **價格過濾有效**：TP 的 Price Weighted Arousal ({tp_pwa:.4f}) 高於 FP ({fp_pwa:.4f})，成功區分出高價值的驚豔商品，壓制了廉價品的雜訊。\n"
         else:
-            md_content += f"- **強度區分不明顯**：TP ({tp_intensity:.4f}) 與 TN ({tn_intensity:.4f}) 差異不大。\n"
+            md_content += f"- **價格過濾不明顯**：TP ({tp_pwa:.4f}) 與 FP ({fp_pwa:.4f}) 差異不大，可能因為部分爆品本身也是低價品。\n"
             
-        if fn_intensity < tp_intensity:
-            md_content += f"- **漏抓特徵**：FN 的 Intensity Score ({fn_intensity:.4f}) 低於 TP，可能因為這些被漏掉的爆品屬於「低調熱賣」或「回購型」，導致 Intensity 被 repurchase 分母稀釋。\n"
-            
-        if fp_intensity > tp_intensity:
-            md_content += f"- **誤判來源**：FP 的 Intensity Score ({fp_intensity:.4f}) 甚至高於 TP，顯示有些非爆品雖然情緒激動 (Arousal 高)，但可能缺乏其他支撐 (如銷量轉化)，導致模型誤判。\n"
+        if tp_nm > fn_nm:
+            md_content += f"- **新客動力區分**：TP 的 Novelty Momentum ({tp_nm:.4f}) 顯著高於 FN ({fn_nm:.4f})，證實了爆品成長主要來自新客，而 FN 多為回購驅動。\n"
 
     except Exception as e:
         md_content += f"- (無法自動生成結論: {e})\n"

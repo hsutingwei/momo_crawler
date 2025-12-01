@@ -814,6 +814,23 @@ def load_product_level_training_set(
         # Intensity Score
         dense["intensity_score"] = (dense["arousal_ratio"] + dense["novelty_ratio"]) / (dense["repurchase_ratio_recent"] + 0.1)
         
+        # ====================== Interaction Features (Cross Features) ======================
+        # 1. Validated Velocity: Acceleration * log1p(Volume)
+        # Rationale: Acceleration with very few comments is unstable.
+        dense["validated_velocity"] = dense["ratio_recent30_to_prev60"] * np.log1p(dense["comment_3rd_30d"])
+        
+        # 2. Price Weighted Arousal: Arousal * log1p(Price)
+        # Rationale: FP has high arousal but low price. TP has higher price.
+        dense["price_weighted_arousal"] = dense["arousal_ratio"] * np.log1p(dense["price"])
+        
+        # 3. Novelty Momentum: Acceleration * (1 - Repurchase Ratio)
+        # Rationale: High acceleration driven by NEW people.
+        dense["novelty_momentum"] = dense["ratio_recent30_to_prev60"] * (1 - dense["repurchase_ratio_recent"].fillna(0))
+        
+        # 4. Is Mature Product: Explicit Flag
+        # Rationale: Help tree split "Old Hits" from "New Hits".
+        dense["is_mature_product"] = ((dense["comment_count_pre"] > 50) | (dense["repurchase_ratio_recent"] > 0.2)).astype(int)
+
         # Handle days_since_last_comment for items with no comments
         dense.loc[dense["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
 
@@ -957,7 +974,8 @@ def load_product_level_training_set(
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
-            "arousal_ratio", "novelty_ratio", "intensity_score"
+            "arousal_ratio", "novelty_ratio", "intensity_score",
+            "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
         ]
         for c in dense_cols:
             if c not in df.columns:
