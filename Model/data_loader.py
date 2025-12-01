@@ -622,7 +622,9 @@ def load_product_level_training_set(
             y_df["representative_batch_time"] = None
 
         # 在 fixed_window 模式下，取消 cutoff 过滤以支持 time-based split
-        cutoff_filter = "" if label_mode == "fixed_window" else "WHERE pc.capture_time <= %(cutoff)s::timestamp"
+        # Modified to use comment_date for cutoff filtering to ensure we include all comments posted before cutoff,
+        # even if captured later (assuming they would have been visible).
+        cutoff_filter = "" if label_mode == "fixed_window" else "WHERE pc.comment_date <= %(cutoff)s::date"
         sql_dense = f"""
         WITH pre_comments AS (
           SELECT pc.*, p.name, p.price::float AS price, p.keyword
@@ -652,26 +654,26 @@ def load_product_level_training_set(
             AVG(score::float) FILTER (WHERE score IS NOT NULL) AS score_mean,
             SUM(like_count::int) FILTER (WHERE like_count IS NOT NULL) AS like_count_sum,
             COUNT(*) AS comment_count_pre,
-            -- Temporal Features
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '7 days') AS comment_count_7d,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_count_30d,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS comment_count_90d,
-            EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(capture_time))) / 86400.0 AS days_since_last_comment,
+            -- Temporal Features (Modified to use comment_date instead of capture_time)
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '7 days') AS comment_count_7d,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '30 days') AS comment_count_30d,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS comment_count_90d,
+            EXTRACT(EPOCH FROM (%(cutoff)s::timestamp - MAX(comment_date))) / 86400.0 AS days_since_last_comment,
             -- Temporal Trend Features (90-day segmented windows)
             -- comment_3rd_30d: 0-30 days before cutoff (Recent)
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_3rd_30d,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '30 days') AS comment_3rd_30d,
             -- comment_2nd_30d: 31-60 days before cutoff
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '60 days' 
-                               AND capture_time < %(cutoff)s::timestamp - INTERVAL '30 days') AS comment_2nd_30d,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '60 days' 
+                               AND comment_date < %(cutoff)s::date - INTERVAL '30 days') AS comment_2nd_30d,
             -- comment_1st_30d: 61-90 days before cutoff
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' 
-                               AND capture_time < %(cutoff)s::timestamp - INTERVAL '60 days') AS comment_1st_30d,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' 
+                               AND comment_date < %(cutoff)s::date - INTERVAL '60 days') AS comment_1st_30d,
             -- Content Features (Recent 90 Days)
-            AVG(score::float) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days') AS sentiment_mean_recent,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND score <= 2) AS neg_count_recent,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND comment_text ~ '促銷|特價|打折|滿額|免運|團購') AS promo_count_recent,
-            COUNT(*) FILTER (WHERE capture_time >= %(cutoff)s::timestamp - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆') AS repurchase_count_recent
+            AVG(score::float) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS sentiment_mean_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score <= 2) AS neg_count_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '促銷|特價|打折|滿額|免運|團購') AS promo_count_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆') AS repurchase_count_recent
           FROM pre_comments
           GROUP BY product_id
         ),
