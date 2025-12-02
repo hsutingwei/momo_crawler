@@ -12,8 +12,9 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     df.loc[(df["y_true"]==0) & (df["y_pred_best"]==1), "group"] = "FP"
     
     features = [
-        "arousal_ratio", "novelty_ratio", "intensity_score", "repurchase_ratio_recent",
-        "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
+        "clean_arousal_score", "bert_arousal_mean", "bert_novelty_mean", 
+        "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
+        "intensity_score", "validated_velocity", "is_mature_product"
     ]
     
     # Calculate mean for each group
@@ -24,14 +25,14 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     stats = stats.reindex([g for g in desired_order if g in stats.index])
     
     md_content = f"""
-## Interaction Features Analysis (Cross Features)
+## BERT Semantic Feature Analysis
 
-為了進一步區分雜訊與真實爆發，我們引入了交互特徵：
+我們已導入 BERT Zero-Shot Classification 取代舊的 Regex 關鍵字。以下分析新特徵的效果：
 
-- **validated_velocity**: `Acceleration * log1p(Volume)`。確認高成長是否由足夠的評論量支撐。
-- **price_weighted_arousal**: `Arousal * log1p(Price)`。區分「廉價炒作 (FP)」與「高價驚豔 (TP)」。
-- **novelty_momentum**: `Acceleration * (1 - Repurchase)`。確認成長動力來自「新客」而非「回購」。
-- **is_mature_product**: 標記是否為成熟商品 (高累積評論或高回購)。
+- **clean_arousal_score**: `Arousal * (1 - Negative) * (1 - Advertisement)`。排除負評與廣告後的純淨驚豔分數。
+- **bert_negative_mean**: BERT 判定的負面抱怨機率。
+- **bert_advertisement_mean**: BERT 判定的廣告業配機率。
+- **bert_novelty_mean**: BERT 判定的新奇感機率。
 
 ### 特徵平均值比較 (Mean Values by Group)
 
@@ -43,25 +44,25 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     
     # Automated insights
     try:
-        tp_vv = stats.loc["TP", "validated_velocity"] if "TP" in stats.index else 0
-        fp_vv = stats.loc["FP", "validated_velocity"] if "FP" in stats.index else 0
+        tp_clean = stats.loc["TP", "clean_arousal_score"] if "TP" in stats.index else 0
+        fp_clean = stats.loc["FP", "clean_arousal_score"] if "FP" in stats.index else 0
         
-        tp_pwa = stats.loc["TP", "price_weighted_arousal"] if "TP" in stats.index else 0
-        fp_pwa = stats.loc["FP", "price_weighted_arousal"] if "FP" in stats.index else 0
+        tp_neg = stats.loc["TP", "bert_negative_mean"] if "TP" in stats.index else 0
+        fp_neg = stats.loc["FP", "bert_negative_mean"] if "FP" in stats.index else 0
         
-        tp_nm = stats.loc["TP", "novelty_momentum"] if "TP" in stats.index else 0
-        fn_nm = stats.loc["FN", "novelty_momentum"] if "FN" in stats.index else 0
+        tp_ad = stats.loc["TP", "bert_advertisement_mean"] if "TP" in stats.index else 0
+        fp_ad = stats.loc["FP", "bert_advertisement_mean"] if "FP" in stats.index else 0
 
-        if tp_vv > fp_vv:
-            md_content += f"- **速度驗證有效**：TP 的 Validated Velocity ({tp_vv:.4f}) 高於 FP ({fp_vv:.4f})，顯示真爆品通常伴隨更紮實的評論量成長。\n"
-        
-        if tp_pwa > fp_pwa:
-            md_content += f"- **價格過濾有效**：TP 的 Price Weighted Arousal ({tp_pwa:.4f}) 高於 FP ({fp_pwa:.4f})，成功區分出高價值的驚豔商品，壓制了廉價品的雜訊。\n"
+        if tp_clean > fp_clean:
+            md_content += f"- **Clean Arousal 有效**：TP 的 Clean Arousal ({tp_clean:.4f}) 高於 FP ({fp_clean:.4f})，顯示過濾負評與廣告後，驚豔感更能代表真實爆品。\n"
         else:
-            md_content += f"- **價格過濾不明顯**：TP ({tp_pwa:.4f}) 與 FP ({fp_pwa:.4f}) 差異不大，可能因為部分爆品本身也是低價品。\n"
+            md_content += f"- **Clean Arousal 區分力不足**：TP ({tp_clean:.4f}) 與 FP ({fp_clean:.4f}) 差異不大，需檢查 FP 是否為高品質的非爆品。\n"
             
-        if tp_nm > fn_nm:
-            md_content += f"- **新客動力區分**：TP 的 Novelty Momentum ({tp_nm:.4f}) 顯著高於 FN ({fn_nm:.4f})，證實了爆品成長主要來自新客，而 FN 多為回購驅動。\n"
+        if fp_neg > tp_neg:
+            md_content += f"- **負評過濾驗證**：FP 的負評分數 ({fp_neg:.4f}) 高於 TP ({tp_neg:.4f})，證實部分 FP 來自於負面情緒的高 Arousal。\n"
+            
+        if fp_ad > tp_ad:
+            md_content += f"- **廣告偵測驗證**：FP 的廣告分數 ({fp_ad:.4f}) 高於 TP ({tp_ad:.4f})，證實部分 FP 來自於業配或廣告文案。\n"
 
     except Exception as e:
         md_content += f"- (無法自動生成結論: {e})\n"

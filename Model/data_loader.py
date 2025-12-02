@@ -678,16 +678,14 @@ def load_product_level_training_set(
             
             -- Semantic Features (BERT Zero-Shot)
             -- We replace regex counts with semantic score thresholds (> 0.8) and also add mean scores
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_repurchase > 0.8) AS repurchase_count_recent,
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_arousal > 0.8) AS arousal_count_recent,
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_novelty > 0.8) AS novelty_count_recent,
+            -- Note: We use the mean probability as the primary signal now.
             
             -- Semantic Mean Scores (Recent 90 Days)
-            AVG(score_arousal) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS arousal_score_mean,
-            AVG(score_novelty) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS novelty_score_mean,
-            AVG(score_repurchase) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS repurchase_score_mean,
-            AVG(score_negative) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS negative_score_mean,
-            AVG(score_advertisement) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS advertisement_score_mean
+            AVG(score_arousal) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_arousal_mean,
+            AVG(score_novelty) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_novelty_mean,
+            AVG(score_repurchase) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_repurchase_mean,
+            AVG(score_negative) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_negative_mean,
+            AVG(score_advertisement) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_advertisement_mean
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -778,14 +776,11 @@ def load_product_level_training_set(
           COALESCE(m.pos_count_recent,0) AS pos_count_recent,
           COALESCE(m.neg_count_recent,0) AS neg_count_recent,
           COALESCE(m.promo_count_recent,0) AS promo_count_recent,
-          COALESCE(m.repurchase_count_recent,0) AS repurchase_count_recent,
-          COALESCE(m.arousal_count_recent,0) AS arousal_count_recent,
-          COALESCE(m.novelty_count_recent,0) AS novelty_count_recent,
-          COALESCE(m.arousal_score_mean,0) AS arousal_score_mean,
-          COALESCE(m.novelty_score_mean,0) AS novelty_score_mean,
-          COALESCE(m.repurchase_score_mean,0) AS repurchase_score_mean,
-          COALESCE(m.negative_score_mean,0) AS negative_score_mean,
-          COALESCE(m.advertisement_score_mean,0) AS advertisement_score_mean,
+          COALESCE(m.bert_arousal_mean,0) AS bert_arousal_mean,
+          COALESCE(m.bert_novelty_mean,0) AS bert_novelty_mean,
+          COALESCE(m.bert_repurchase_mean,0) AS bert_repurchase_mean,
+          COALESCE(m.bert_negative_mean,0) AS bert_negative_mean,
+          COALESCE(m.bert_advertisement_mean,0) AS bert_advertisement_mean,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -801,8 +796,8 @@ def load_product_level_training_set(
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
-            "arousal_ratio", "novelty_ratio", "intensity_score",
-            "arousal_score_mean", "novelty_score_mean", "repurchase_score_mean", "negative_score_mean", "advertisement_score_mean",
+            "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
+            "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre"
         ]
@@ -821,14 +816,20 @@ def load_product_level_training_set(
         denom = dense["comment_count_90d"] + 1
         dense["neg_ratio_recent"] = dense["neg_count_recent"] / denom
         dense["promo_ratio_recent"] = dense["promo_count_recent"] / denom
-        dense["repurchase_ratio_recent"] = dense["repurchase_count_recent"] / denom
         
-        # Arousal & Novelty Ratios
-        dense["arousal_ratio"] = dense["arousal_count_recent"] / denom
-        dense["novelty_ratio"] = dense["novelty_count_recent"] / denom
+        # BERT-based Ratios & Scores
+        # We use the mean probability directly as the "ratio" or "score"
+        dense["arousal_ratio"] = dense["bert_arousal_mean"]
+        dense["novelty_ratio"] = dense["bert_novelty_mean"]
+        dense["repurchase_ratio_recent"] = dense["bert_repurchase_mean"]
         
-        # Intensity Score
-        dense["intensity_score"] = (dense["arousal_ratio"] + dense["novelty_ratio"]) / (dense["repurchase_ratio_recent"] + 0.1)
+        # Clean Arousal Score: Arousal * (1 - Negative) * (1 - Advertisement)
+        # Logic: True arousal should not be angry or fake.
+        dense["clean_arousal_score"] = dense["bert_arousal_mean"] * (1 - dense["bert_negative_mean"]) * (1 - dense["bert_advertisement_mean"])
+        
+        # Intensity Score (Updated)
+        # Use clean_arousal_score instead of raw arousal_ratio
+        dense["intensity_score"] = (dense["clean_arousal_score"] + dense["bert_novelty_mean"]) / (dense["bert_repurchase_mean"] + 0.1)
         
         # ====================== Interaction Features (Cross Features) ======================
         # 1. Validated Velocity: Acceleration * log1p(Volume)
@@ -837,11 +838,11 @@ def load_product_level_training_set(
         
         # 2. Price Weighted Arousal: Arousal * log1p(Price)
         # Rationale: FP has high arousal but low price. TP has higher price.
-        dense["price_weighted_arousal"] = dense["arousal_ratio"] * np.log1p(dense["price"])
+        dense["price_weighted_arousal"] = dense["clean_arousal_score"] * np.log1p(dense["price"])
         
         # 3. Novelty Momentum: Acceleration * (1 - Repurchase Ratio)
         # Rationale: High acceleration driven by NEW people.
-        dense["novelty_momentum"] = dense["ratio_recent30_to_prev60"] * (1 - dense["repurchase_ratio_recent"].fillna(0))
+        dense["novelty_momentum"] = dense["ratio_recent30_to_prev60"] * (1 - dense["repurchase_ratio_recent"])
         
         # 4. Is Mature Product: Explicit Flag
         # Rationale: Help tree split "Old Hits" from "New Hits".
@@ -990,13 +991,13 @@ def load_product_level_training_set(
             "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
-            "arousal_ratio", "novelty_ratio", "intensity_score",
-            "arousal_score_mean", "novelty_score_mean", "repurchase_score_mean", "negative_score_mean", "advertisement_score_mean",
+            "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
+            "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
         ]
-        for c in dense_cols:
-            if c not in df.columns:
-                df[c] = 0
+        # Remove duplicate columns if any (safety check)
+        df = df.loc[:, ~df.columns.duplicated()]
+
         X_dense = df[dense_cols].fillna(0).astype(float)
 
         y = df["y"].astype(int)

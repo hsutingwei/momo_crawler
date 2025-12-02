@@ -105,6 +105,16 @@ def run_experiment(exp_config, output_dir):
         if 3 in le.classes_:
             explosive_class_idx = le.transform([3])[0]
 
+    if not y.index.is_unique:
+        print("[WARNING] y index is not unique! Resetting index.")
+        y = y.reset_index(drop=True)
+        y_encoded = y_encoded.reset_index(drop=True)
+        # Also reset X_all index? X_all is sparse matrix, indexed by integer 0..N.
+        # If y index was not 0..N, splitting might be weird if using loc?
+        # skf.split uses indices (integers), so it slices X_all by row number.
+        # y_encoded.iloc[tr_idx] uses integer position.
+        # So y index shouldn't matter for iloc.
+    
     for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_encoded)), y_encoded)):
         X_train, X_val = X_all[tr_idx], X_all[va_idx]
         y_train, y_val = y_encoded.iloc[tr_idx], y_encoded.iloc[va_idx]
@@ -146,37 +156,46 @@ def run_experiment(exp_config, output_dir):
                 scale_pos_weight=scale_pos_weight
             )
         
-        model.fit(X_train, y_train)
+        try:
+            model.fit(X_train, y_train)
+        except Exception as e:
+            print(f"[ERROR Fold {fold}] model.fit failed: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
         
         # Predict
         y_pred = model.predict(X_val)
         
+        # Convert y_val to numpy to avoid pandas alignment issues
+        y_val_np = y_val.values
+        
         if is_multiclass:
             # Multiclass Metrics
             m = {
-                "accuracy": accuracy_score(y_val, y_pred),
-                "f1_macro": f1_score(y_val, y_pred, average="macro", zero_division=0),
-                "f1_weighted": f1_score(y_val, y_pred, average="weighted", zero_division=0),
+                "accuracy": accuracy_score(y_val_np, y_pred),
+                "f1_macro": f1_score(y_val_np, y_pred, average="macro", zero_division=0),
+                "f1_weighted": f1_score(y_val_np, y_pred, average="weighted", zero_division=0),
                 # Class 3 (Explosive) Metrics if exists
-                "f1_class3": f1_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
-                "precision_class3": precision_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
-                "recall_class3": recall_score(y_val, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0
+                "f1_class3": f1_score(y_val_np, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
+                "precision_class3": precision_score(y_val_np, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0,
+                "recall_class3": recall_score(y_val_np, y_pred, labels=[explosive_class_idx], average=None, zero_division=0)[0] if explosive_class_idx is not None else 0.0
             }
         else:
             # Binary Metrics
             y_prob = model.predict_proba(X_val)[:, 1]
             
             # 1. Default Threshold (0.5) Metrics
-            cm = confusion_matrix(y_val, y_pred)
+            cm = confusion_matrix(y_val_np, y_pred)
             print(f"  [Fold {fold}] Confusion Matrix (Th=0.5): TN={cm[0,0]}, FP={cm[0,1]}, FN={cm[1,0]}, TP={cm[1,1]}")
             
             m = {
-                "accuracy": accuracy_score(y_val, y_pred),
-                "precision": precision_score(y_val, y_pred, zero_division=0),
-                "recall": recall_score(y_val, y_pred, zero_division=0),
-                "f1": f1_score(y_val, y_pred, zero_division=0),
-                "pr_auc": average_precision_score(y_val, y_prob),
-                "roc_auc": roc_auc_score(y_val, y_prob)
+                "accuracy": accuracy_score(y_val_np, y_pred),
+                "precision": precision_score(y_val_np, y_pred, zero_division=0),
+                "recall": recall_score(y_val_np, y_pred, zero_division=0),
+                "f1": f1_score(y_val_np, y_pred, zero_division=0),
+                "pr_auc": average_precision_score(y_val_np, y_prob),
+                "roc_auc": roc_auc_score(y_val_np, y_prob)
             }
             
             # 2. Threshold Scanning (if enabled)
@@ -188,14 +207,14 @@ def run_experiment(exp_config, output_dir):
                 
                 for th in thresholds:
                     y_pred_th = (y_prob >= th).astype(int)
-                    f1_th = f1_score(y_val, y_pred_th, zero_division=0)
+                    f1_th = f1_score(y_val_np, y_pred_th, zero_division=0)
                     if f1_th > best_f1:
                         best_f1 = f1_th
                         best_th = th
                         best_metrics = {
                             "f1_best_th": f1_th,
-                            "precision_best_th": precision_score(y_val, y_pred_th, zero_division=0),
-                            "recall_best_th": recall_score(y_val, y_pred_th, zero_division=0),
+                            "precision_best_th": precision_score(y_val_np, y_pred_th, zero_division=0),
+                            "recall_best_th": recall_score(y_val_np, y_pred_th, zero_division=0),
                             "best_threshold": best_th
                         }
                 # Merge best metrics
@@ -204,40 +223,50 @@ def run_experiment(exp_config, output_dir):
             # Collect data for error analysis if threshold search is enabled (implies we care about detailed analysis)
             # OR if it's explicitly one of our target experiments
             if do_threshold_search:
-                # Get validation meta and dense features
-                meta_val = meta.iloc[va_idx].reset_index(drop=True)
-                X_dense_val = X_dense_df.iloc[va_idx].reset_index(drop=True)
-                
-                # Create a DataFrame for this fold's predictions
-                fold_df = pd.DataFrame({
-                    "product_id": meta_val["product_id"],
-                    "y_true": y_val.values,
-                    "y_prob": y_prob
-                })
-                
-                # Add dense features
-                cols_to_add = [
-                    "price", "comment_count_pre", "score_mean", "like_count_sum", 
-                    "had_any_change_pre", "num_increases_pre", 
-                    "has_image_urls", "has_video_url", "has_reply_content",
-                    "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
-                    "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
-                    "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
-                    "arousal_ratio", "novelty_ratio", "intensity_score",
-                    "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
-                ]
-                
-                # Also add max_raw_delta / max_raw_ratio if available in meta
-                if "max_raw_delta" in meta_val.columns:
-                    fold_df["max_raw_delta"] = meta_val["max_raw_delta"]
-                if "max_raw_ratio" in meta_val.columns:
-                    fold_df["max_raw_ratio"] = meta_val["max_raw_ratio"]
+                try:
+                    # Get validation meta and dense features
+                    meta_val = meta.iloc[va_idx].reset_index(drop=True)
+                    X_dense_val = X_dense_df.iloc[va_idx].reset_index(drop=True)
+                    
+                    # Create a DataFrame for this fold's predictions
+                    fold_df = pd.DataFrame({
+                        "product_id": meta_val["product_id"],
+                        "y_true": y_val.values,
+                        "y_prob": y_prob
+                    })
+                    
+                    # Add dense features
+                    cols_to_add = [
+                        "price", "comment_count_pre", "score_mean", "like_count_sum", 
+                        "had_any_change_pre", "num_increases_pre", 
+                        "has_image_urls", "has_video_url", "has_reply_content",
+                        "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
+                        "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
+                        "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
+                        "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
+                        "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
+                        "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
+                    ]
+                    
+                    # Also add max_raw_delta / max_raw_ratio if available in meta
+                    if "max_raw_delta" in meta_val.columns:
+                        fold_df["max_raw_delta"] = meta_val["max_raw_delta"]
+                    if "max_raw_ratio" in meta_val.columns:
+                        fold_df["max_raw_ratio"] = meta_val["max_raw_ratio"]
 
-                for c in cols_to_add:
-                    if c in X_dense_val.columns:
-                        fold_df[c] = X_dense_val[c]
-                
-                error_analysis_rows.append(fold_df)
+                    # Filter cols that exist in X_dense_val
+                    existing_cols = [c for c in cols_to_add if c in X_dense_val.columns]
+                    
+                    # Use concat to add columns, handling potential duplicates by dropping them first from X_dense_val selection if needed
+                    # But X_dense_val should be clean now.
+                    # We align on index (both are 0..N)
+                    fold_df = pd.concat([fold_df, X_dense_val[existing_cols]], axis=1)
+                    
+                    error_analysis_rows.append(fold_df)
+                except Exception as e:
+                    print(f"[ERROR Fold {fold}] Error analysis collection failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         metrics_list.append(m)
     

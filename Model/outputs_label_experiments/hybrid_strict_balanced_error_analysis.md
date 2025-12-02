@@ -301,3 +301,26 @@ Count: 24
 - **速度驗證有效**：TP 的 Validated Velocity (532727.2428) 高於 FP (365629.5833)，顯示真爆品通常伴隨更紮實的評論量成長。
 - **價格過濾有效**：TP 的 Price Weighted Arousal (0.0346) 高於 FP (0.0146)，成功區分出高價值的驚豔商品，壓制了廉價品的雜訊。
 - **新客動力區分**：TP 的 Novelty Momentum (267659.3872) 顯著高於 FN (126757.1372)，證實了爆品成長主要來自新客，而 FN 多為回購驅動。
+
+
+## BERT Semantic Feature Analysis
+
+我們已導入 BERT Zero-Shot Classification 取代舊的 Regex 關鍵字。以下分析新特徵的效果：
+
+- **clean_arousal_score**: `Arousal * (1 - Negative) * (1 - Advertisement)`。排除負評與廣告後的純淨驚豔分數。
+- **bert_negative_mean**: BERT 判定的負面抱怨機率。
+- **bert_advertisement_mean**: BERT 判定的廣告業配機率。
+- **bert_novelty_mean**: BERT 判定的新奇感機率。
+
+### 特徵平均值比較 (Mean Values by Group)
+
+| group   |   clean_arousal_score |   bert_arousal_mean |   bert_novelty_mean |   bert_repurchase_mean |   bert_negative_mean |   bert_advertisement_mean |   intensity_score |   validated_velocity |   is_mature_product |
+|:--------|----------------------:|--------------------:|--------------------:|-----------------------:|---------------------:|--------------------------:|------------------:|---------------------:|--------------------:|
+| TP      |             0.0687881 |           0.0960391 |            0.152968 |               0.508962 |            0.0529452 |                 0.223785  |          0.570804 |             591048   |            0.958159 |
+| FN      |             0.0819727 |           0.121595  |            0.124164 |               0.492245 |            0.0548418 |                 0.192752  |          0.439009 |             106808   |            0.868687 |
+| FP      |             0.071329  |           0.0997388 |            0.126724 |               0.526903 |            0.047144  |                 0.214516  |          0.386704 |             331329   |            0.974781 |
+| TN      |             0.0283106 |           0.0414624 |            0.0434   |               0.17801  |            0.0213483 |                 0.0753675 |          0.190234 |              51289.9 |            0.305917 |
+
+### 深入觀察結論
+
+- **Clean Arousal 區分力不足**：TP (0.0688) 與 FP (0.0713) 差異不大，需檢查 FP 是否為高品質的非爆品。
