@@ -627,9 +627,11 @@ def load_product_level_training_set(
         cutoff_filter = "" if label_mode == "fixed_window" else "WHERE pc.comment_date <= %(cutoff)s::date"
         sql_dense = f"""
         WITH pre_comments AS (
-          SELECT pc.*, p.name, p.price::float AS price, p.keyword
+          SELECT pc.*, p.name, p.price::float AS price, p.keyword,
+                 css.score_arousal, css.score_novelty, css.score_repurchase, css.score_negative, css.score_advertisement
           FROM product_comments pc
           JOIN products p ON p.id = pc.product_id
+          LEFT JOIN comment_semantic_scores css ON pc.comment_id = css.comment_id
           {cutoff_filter}
         ),
         media_agg AS (
@@ -673,11 +675,19 @@ def load_product_level_training_set(
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score >= 4) AS pos_count_recent,
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score <= 2) AS neg_count_recent,
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '促銷|特價|打折|滿額|免運|團購') AS promo_count_recent,
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '回購|囤貨|囤了|再買|買爆|再次購買|忠實|買過') AS repurchase_count_recent,
-            -- Arousal Keywords (High Energy/Surprise)
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '驚豔|嚇到|太神|誇張|只有扯|必須推|！！！|！！|？？？|？？') AS arousal_count_recent,
-            -- Novelty Keywords (First-time/Discovery)
-            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND comment_text ~ '第一次買|觀望很久|終於下手|相見恨晚|抱著試試看|初次') AS novelty_count_recent
+            
+            -- Semantic Features (BERT Zero-Shot)
+            -- We replace regex counts with semantic score thresholds (> 0.8) and also add mean scores
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_repurchase > 0.8) AS repurchase_count_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_arousal > 0.8) AS arousal_count_recent,
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days' AND score_novelty > 0.8) AS novelty_count_recent,
+            
+            -- Semantic Mean Scores (Recent 90 Days)
+            AVG(score_arousal) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS arousal_score_mean,
+            AVG(score_novelty) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS novelty_score_mean,
+            AVG(score_repurchase) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS repurchase_score_mean,
+            AVG(score_negative) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS negative_score_mean,
+            AVG(score_advertisement) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS advertisement_score_mean
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -771,6 +781,11 @@ def load_product_level_training_set(
           COALESCE(m.repurchase_count_recent,0) AS repurchase_count_recent,
           COALESCE(m.arousal_count_recent,0) AS arousal_count_recent,
           COALESCE(m.novelty_count_recent,0) AS novelty_count_recent,
+          COALESCE(m.arousal_score_mean,0) AS arousal_score_mean,
+          COALESCE(m.novelty_score_mean,0) AS novelty_score_mean,
+          COALESCE(m.repurchase_score_mean,0) AS repurchase_score_mean,
+          COALESCE(m.negative_score_mean,0) AS negative_score_mean,
+          COALESCE(m.advertisement_score_mean,0) AS advertisement_score_mean,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -787,6 +802,7 @@ def load_product_level_training_set(
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
             "arousal_ratio", "novelty_ratio", "intensity_score",
+            "arousal_score_mean", "novelty_score_mean", "repurchase_score_mean", "negative_score_mean", "advertisement_score_mean",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre"
         ]
@@ -975,6 +991,7 @@ def load_product_level_training_set(
             "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
             "arousal_ratio", "novelty_ratio", "intensity_score",
+            "arousal_score_mean", "novelty_score_mean", "repurchase_score_mean", "negative_score_mean", "advertisement_score_mean",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
         ]
         for c in dense_cols:
