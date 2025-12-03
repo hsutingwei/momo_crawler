@@ -14,11 +14,12 @@ Treats comment volume as a physical object with velocity, acceleration, and jerk
 *   **Jerk ($j$)**: Rate of change of acceleration ($v_1 - 2v_2 + v_3$). Detects *explosive onset*.
 *   **Early Bird Momentum**: Rewards high acceleration in low-volume items (`acc / log(volume)`).
 
-### B. Algorithm Signal (Semantic Novelty)
-**"How unique does it look?"**
-Models the platform's "Exploration Boost" for unique items.
-*   **Semantic Novelty Score**: Measures the cosine distance between a product's name (TF-IDF vector) and the centroid of its category.
-*   **Hypothesis**: Unique items get more algorithmic exposure, leading to higher viral potential.
+### B. Algorithm Signal (Category Fit)
+**"Does it fit the consensus?"**
+Models the "Prototypicality" of the product based on user feedback.
+*   **Category Fit Score**: Measures the cosine similarity between the product's aggregated comments and the centroid of its category.
+*   **Hypothesis**: Viral hits receive "standard" positive feedback (High Fit), while non-hits have unique outliers or irrelevant noise (Low Fit).
+*   **Quality Driven Momentum**: `Acceleration * Category Fit`. Filters out high-speed items that lack quality consensus.
 
 ## 2. Key Results
 

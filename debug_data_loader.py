@@ -30,7 +30,7 @@ def main():
                 print(f"  {col}: NOT FOUND!")
 
         # Check for BERT features
-        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score", "semantic_novelty_score", "semantic_novelty_comment"]
+        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score", "category_fit_score", "quality_driven_momentum"]
         print("\nChecking BERT & Novelty Features:")
         for col in bert_cols:
             if col in X_dense.columns:
@@ -39,15 +39,9 @@ def main():
                 print(f"  {col}: NOT FOUND!")
         
         # Check aggregated_comments in the internal dataframe if accessible
-        # Since load_product_level_training_set returns X_dense which is a processed dataframe, 
-        # we might not have 'aggregated_comments' column in X_dense if it wasn't in dense_cols.
-        # But we added it to dense_cols? No, we added 'semantic_novelty_comment'.
-        # 'aggregated_comments' is an intermediate column.
-        # However, we can check if 'semantic_novelty_comment' is all zeros.
-        
-        if "semantic_novelty_comment" in X_dense.columns:
-             non_zero = (X_dense["semantic_novelty_comment"] > 0).sum()
-             print(f"\nSemantic Novelty Comment Non-Zero Count: {non_zero} / {len(X_dense)}")
+        if "category_fit_score" in X_dense.columns:
+             non_zero = (X_dense["category_fit_score"] > 0).sum()
+             print(f"\nCategory Fit Score Non-Zero Count: {non_zero} / {len(X_dense)}")
                 
         print("\nSample Data (first 5 rows of Kinematics):")
         if all(c in X_dense.columns for c in kin_cols):

@@ -795,7 +795,7 @@ def load_product_level_training_set(
             "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
-            "early_bird_momentum", "semantic_novelty_score", "semantic_novelty_comment",
+            "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -810,50 +810,13 @@ def load_product_level_training_set(
             if c not in df.columns:
                 df[c] = 0
         
-        # ====================== Semantic Novelty Score (New) ======================
-        # Goal: Measure how "unique" the product title is within its category (keyword).
-        # Logic: Cosine Distance between Item Vector and Category Centroid.
+        # ====================== Category Fit Score (Refactored from Semantic Novelty) ======================
+        # Goal: Measure how well the product's user feedback fits the "consensus" of the category.
+        # Logic: Cosine Similarity (1 - Distance) between Aggregated Comment Vector and Category Centroid.
+        # Insight: Viral hits are "Prototypical" (High Fit), while non-hits are outliers (Low Fit).
         
-        print("Computing Semantic Novelty Score...")
-        df["semantic_novelty_score"] = 0.0
-        
-        if "name" in df.columns and "keyword" in df.columns:
-            # Group by keyword
-            for kw, group in df.groupby("keyword"):
-                if len(group) < 2:
-                    # If only 1 item, novelty is 0 (or undefined, but 0 is safe)
-                    continue
-                
-                try:
-                    # TF-IDF Vectorization
-                    # Use simple settings for speed
-                    tfidf = TfidfVectorizer(max_features=1000, stop_words="english")
-                    # Fill NaN names
-                    texts = group["name"].fillna("").tolist()
-                    X_text = tfidf.fit_transform(texts)
-                    
-                    # Calculate Centroid (Mean Vector)
-                    # X_text is sparse, so mean returns a matrix. Convert to array.
-                    centroid = np.asarray(X_text.mean(axis=0))
-                    
-                    # Calculate Cosine Distance to Centroid
-                    # cosine_distances expects 2D arrays
-                    dists = cosine_distances(X_text, centroid)
-                    
-                    # Assign back to df
-                    # dists is (n_samples, 1)
-                    df.loc[group.index, "semantic_novelty_score"] = dists.flatten()
-                    
-                except Exception as e:
-                    print(f"Error computing novelty for keyword '{kw}': {e}")
-                    # Keep 0.0
-        
-        # ====================== Semantic Novelty Comment (A/B Test Feature B) ======================
-        # Goal: Measure how "unique" the product's user feedback is within its category.
-        # Logic: Cosine Distance between Aggregated Comment Vector and Category Comment Centroid.
-        
-        print("Computing Semantic Novelty Comment (A/B Test)...")
-        df["semantic_novelty_comment"] = 0.0
+        print("Computing Category Fit Score...")
+        df["category_fit_score"] = 0.0
         
         if "aggregated_comments" in df.columns and "keyword" in df.columns:
             for kw, group in df.groupby("keyword"):
@@ -862,7 +825,6 @@ def load_product_level_training_set(
                 
                 try:
                     # TF-IDF Vectorization for Comments
-                    # Use slightly larger features for comments as they are richer
                     tfidf_comment = TfidfVectorizer(max_features=2000, stop_words="english")
                     
                     # Fill NaN comments
@@ -880,11 +842,15 @@ def load_product_level_training_set(
                     # Calculate Cosine Distance
                     dists = cosine_distances(X_text, centroid)
                     
+                    # Convert to Similarity (Fit Score)
+                    # 1 - Distance = Similarity
+                    sims = 1.0 - dists.flatten()
+                    
                     # Assign back
-                    df.loc[group.index, "semantic_novelty_comment"] = dists.flatten()
+                    df.loc[group.index, "category_fit_score"] = sims
                     
                 except Exception as e:
-                    print(f"Error computing comment novelty for keyword '{kw}': {e}")
+                    print(f"Error computing category fit for keyword '{kw}': {e}")
         
         # ====================== Review Kinematics Feature Engineering ======================
         # 1. Velocity (v): Already loaded as kin_v_1, kin_v_2, kin_v_3
@@ -908,6 +874,11 @@ def load_product_level_training_set(
         # Reward high acceleration with low total comments.
         # Formula: kin_acc_abs * (1 / (np.log1p(comment_count_90d) + 1))
         df["early_bird_momentum"] = df["kin_acc_abs"] * (1 / (np.log1p(df["comment_count_90d"]) + 1))
+        
+        # 5. Quality Driven Momentum (Category Fit Interaction)
+        # Acceleration weighted by Category Fit.
+        # Rationale: High acceleration is good, but only if the feedback is "standard/positive" (High Fit).
+        df["quality_driven_momentum"] = df["kin_acc_abs"] * df["category_fit_score"]
         
         # ====================== Existing Feature Engineering ======================
         
