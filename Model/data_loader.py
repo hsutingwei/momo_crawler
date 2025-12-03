@@ -673,7 +673,11 @@ def load_product_level_training_set(
                                AND comment_date < %(cutoff)s::date - INTERVAL '7 days') AS kin_v_2,
             -- W3 (Baseline): [cutoff-21d, cutoff-14d)
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '21 days' 
-                               AND comment_date < %(cutoff)s::date - INTERVAL '14 days') AS kin_v_3
+                               AND comment_date < %(cutoff)s::date - INTERVAL '14 days') AS kin_v_3,
+            
+            -- Aggregated Comments for Semantic Novelty (A/B Test)
+            -- Concatenate recent comments (last 90 days) to form a "product document"
+            STRING_AGG(comment_text, ' ') FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS aggregated_comments
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -772,6 +776,7 @@ def load_product_level_training_set(
           COALESCE(m.kin_v_1, 0) AS kin_v_1,
           COALESCE(m.kin_v_2, 0) AS kin_v_2,
           COALESCE(m.kin_v_3, 0) AS kin_v_3,
+          m.aggregated_comments,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -790,7 +795,7 @@ def load_product_level_training_set(
             "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
-            "early_bird_momentum", "semantic_novelty_score",
+            "early_bird_momentum", "semantic_novelty_score", "semantic_novelty_comment",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -842,6 +847,44 @@ def load_product_level_training_set(
                 except Exception as e:
                     print(f"Error computing novelty for keyword '{kw}': {e}")
                     # Keep 0.0
+        
+        # ====================== Semantic Novelty Comment (A/B Test Feature B) ======================
+        # Goal: Measure how "unique" the product's user feedback is within its category.
+        # Logic: Cosine Distance between Aggregated Comment Vector and Category Comment Centroid.
+        
+        print("Computing Semantic Novelty Comment (A/B Test)...")
+        df["semantic_novelty_comment"] = 0.0
+        
+        if "aggregated_comments" in df.columns and "keyword" in df.columns:
+            for kw, group in df.groupby("keyword"):
+                if len(group) < 2:
+                    continue
+                
+                try:
+                    # TF-IDF Vectorization for Comments
+                    # Use slightly larger features for comments as they are richer
+                    tfidf_comment = TfidfVectorizer(max_features=2000, stop_words="english")
+                    
+                    # Fill NaN comments
+                    texts = group["aggregated_comments"].fillna("").tolist()
+                    
+                    # Skip if all empty
+                    if all(not t.strip() for t in texts):
+                        continue
+                        
+                    X_text = tfidf_comment.fit_transform(texts)
+                    
+                    # Calculate Centroid
+                    centroid = np.asarray(X_text.mean(axis=0))
+                    
+                    # Calculate Cosine Distance
+                    dists = cosine_distances(X_text, centroid)
+                    
+                    # Assign back
+                    df.loc[group.index, "semantic_novelty_comment"] = dists.flatten()
+                    
+                except Exception as e:
+                    print(f"Error computing comment novelty for keyword '{kw}': {e}")
         
         # ====================== Review Kinematics Feature Engineering ======================
         # 1. Velocity (v): Already loaded as kin_v_1, kin_v_2, kin_v_3
