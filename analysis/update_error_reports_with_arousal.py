@@ -15,7 +15,8 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
         "clean_arousal_score", "bert_arousal_mean", "bert_novelty_mean", 
         "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
         "intensity_score", "validated_velocity", "is_mature_product",
-        "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs"
+        "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
+        "early_bird_momentum"
     ]
     
     # Calculate mean for each group

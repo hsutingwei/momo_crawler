@@ -788,6 +788,7 @@ def load_product_level_training_set(
             "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
+            "early_bird_momentum",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -819,6 +820,11 @@ def load_product_level_training_set(
         # Physical Jerk: v1 - 2*v2 + v3 (Rate of change of acceleration)
         # Using raw counts for physical jerk to detect massive spikes
         df["kin_jerk_abs"] = df["kin_v_1"] - 2 * df["kin_v_2"] + df["kin_v_3"]
+        
+        # 4. Early Bird Momentum (Phase Lag Optimization)
+        # Reward high acceleration with low total comments.
+        # Formula: kin_acc_abs * (1 / (np.log1p(comment_count_90d) + 1))
+        df["early_bird_momentum"] = df["kin_acc_abs"] * (1 / (np.log1p(df["comment_count_90d"]) + 1))
         
         # ====================== Existing Feature Engineering ======================
         

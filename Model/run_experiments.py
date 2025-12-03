@@ -123,14 +123,36 @@ def run_experiment(exp_config, output_dir):
         scale_pos_weight = None
         if not is_multiclass and use_class_weight:
              # Calculate scale_pos_weight = n_neg / n_pos
-             # Note: n_pos/n_neg are total counts, but for CV we should ideally use training set counts.
-             # However, since we use StratifiedKFold, the ratio is preserved.
-             # We can approximate using the fold's y_train.
              n_neg_tr = (y_train == 0).sum()
              n_pos_tr = (y_train == 1).sum()
              if n_pos_tr > 0:
                  scale_pos_weight = n_neg_tr / n_pos_tr
                  print(f"  [Fold {fold}] Applied scale_pos_weight: {scale_pos_weight:.4f}")
+
+        # ====================== Monotonic Constraints (Phase Lag Optimization) ======================
+        # Goal: Force model to respect acceleration signals.
+        # We need to map feature names to column indices in X_all (X_dense + X_tfidf).
+        # X_dense columns are known from X_dense_df.columns.
+        # X_tfidf columns follow X_dense.
+        
+        monotone_constraints = None
+        if not is_multiclass:
+            # Identify indices for kinematic features
+            kin_features = ["kin_acc_abs", "kin_acc_rel", "kin_jerk_abs"]
+            constraints = [0] * X_all.shape[1]
+            
+            dense_cols_list = X_dense_df.columns.tolist()
+            found_constraints = False
+            
+            for feat in kin_features:
+                if feat in dense_cols_list:
+                    idx = dense_cols_list.index(feat)
+                    constraints[idx] = 1  # +1 for positive constraint
+                    found_constraints = True
+            
+            if found_constraints:
+                monotone_constraints = "(" + ",".join(map(str, constraints)) + ")"
+                print(f"  [Fold {fold}] Applied Monotonic Constraints on Kinematics.")
 
         if is_multiclass:
             model = XGBClassifier(
@@ -153,7 +175,8 @@ def run_experiment(exp_config, output_dir):
                 n_jobs=-1,
                 eval_metric="logloss",
                 use_label_encoder=False,
-                scale_pos_weight=scale_pos_weight
+                scale_pos_weight=scale_pos_weight,
+                monotone_constraints=monotone_constraints
             )
         
         try:
@@ -184,6 +207,31 @@ def run_experiment(exp_config, output_dir):
         else:
             # Binary Metrics
             y_prob = model.predict_proba(X_val)[:, 1]
+            
+            # ====================== Hybrid Rule Simulation (Phase Lag Optimization) ======================
+            # Rule: If y_prob > 0.4 AND kin_jerk_abs > 0.1, force y_pred = 1
+            # We need to access kin_jerk_abs for validation set
+            
+            # Get validation dense features (we need to do this earlier than error analysis block now)
+            X_dense_val_fold = X_dense_df.iloc[va_idx].reset_index(drop=True)
+            
+            if "kin_jerk_abs" in X_dense_val_fold.columns:
+                jerk_val = X_dense_val_fold["kin_jerk_abs"].values
+                # Hybrid Prediction
+                y_pred_hybrid = np.where(
+                    ((y_prob > 0.4) & (jerk_val > 0.1)) | (y_prob > 0.5),
+                    1,
+                    0
+                )
+                
+                # Calculate Hybrid Metrics
+                prec_hybrid = precision_score(y_val_np, y_pred_hybrid, zero_division=0)
+                rec_hybrid = recall_score(y_val_np, y_pred_hybrid, zero_division=0)
+                f1_hybrid = f1_score(y_val_np, y_pred_hybrid, zero_division=0)
+                
+                print(f"  [Fold {fold}] Hybrid Rule: Precision={prec_hybrid:.4f}, Recall={rec_hybrid:.4f}, F1={f1_hybrid:.4f}")
+                
+                # We can store these if we want, but for now just printing is enough as requested.
             
             # 1. Default Threshold (0.5) Metrics
             cm = confusion_matrix(y_val_np, y_pred)
@@ -226,7 +274,8 @@ def run_experiment(exp_config, output_dir):
                 try:
                     # Get validation meta and dense features
                     meta_val = meta.iloc[va_idx].reset_index(drop=True)
-                    X_dense_val = X_dense_df.iloc[va_idx].reset_index(drop=True)
+                    # X_dense_val_fold already retrieved above
+                    X_dense_val = X_dense_val_fold
                     
                     # Create a DataFrame for this fold's predictions
                     fold_df = pd.DataFrame({
@@ -246,6 +295,7 @@ def run_experiment(exp_config, output_dir):
                         "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
                         "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
                         "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
+                        "early_bird_momentum",
                         "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
                     ]
                     
