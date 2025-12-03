@@ -30,11 +30,11 @@ def main():
                 print(f"  {col}: NOT FOUND!")
 
         # Check for BERT features
-        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score"]
-        print("\nChecking BERT Features:")
+        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score", "semantic_novelty_score"]
+        print("\nChecking BERT & Novelty Features:")
         for col in bert_cols:
             if col in X_dense.columns:
-                print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}")
+                print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}, Max={X_dense[col].max():.4f}")
             else:
                 print(f"  {col}: NOT FOUND!")
                 

@@ -14,6 +14,8 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 from scipy.sparse import csr_matrix, coo_matrix, hstack
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_distances
 
 # use same project path style as csv_to_db.py
 import sys
@@ -788,7 +790,7 @@ def load_product_level_training_set(
             "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
-            "early_bird_momentum",
+            "early_bird_momentum", "semantic_novelty_score",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -802,6 +804,44 @@ def load_product_level_training_set(
         for c in ["kin_v_1", "kin_v_2", "kin_v_3"]:
             if c not in df.columns:
                 df[c] = 0
+        
+        # ====================== Semantic Novelty Score (New) ======================
+        # Goal: Measure how "unique" the product title is within its category (keyword).
+        # Logic: Cosine Distance between Item Vector and Category Centroid.
+        
+        print("Computing Semantic Novelty Score...")
+        df["semantic_novelty_score"] = 0.0
+        
+        if "name" in df.columns and "keyword" in df.columns:
+            # Group by keyword
+            for kw, group in df.groupby("keyword"):
+                if len(group) < 2:
+                    # If only 1 item, novelty is 0 (or undefined, but 0 is safe)
+                    continue
+                
+                try:
+                    # TF-IDF Vectorization
+                    # Use simple settings for speed
+                    tfidf = TfidfVectorizer(max_features=1000, stop_words="english")
+                    # Fill NaN names
+                    texts = group["name"].fillna("").tolist()
+                    X_text = tfidf.fit_transform(texts)
+                    
+                    # Calculate Centroid (Mean Vector)
+                    # X_text is sparse, so mean returns a matrix. Convert to array.
+                    centroid = np.asarray(X_text.mean(axis=0))
+                    
+                    # Calculate Cosine Distance to Centroid
+                    # cosine_distances expects 2D arrays
+                    dists = cosine_distances(X_text, centroid)
+                    
+                    # Assign back to df
+                    # dists is (n_samples, 1)
+                    df.loc[group.index, "semantic_novelty_score"] = dists.flatten()
+                    
+                except Exception as e:
+                    print(f"Error computing novelty for keyword '{kw}': {e}")
+                    # Keep 0.0
         
         # ====================== Review Kinematics Feature Engineering ======================
         # 1. Velocity (v): Already loaded as kin_v_1, kin_v_2, kin_v_3
