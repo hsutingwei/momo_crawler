@@ -1,47 +1,50 @@
 from Model.data_loader import load_product_level_training_set
-from config.database import DatabaseConfig
 import pandas as pd
-from sqlalchemy import create_engine
-import os
+import traceback
+import sys
 
 def main():
-    # Construct SQLAlchemy URL
-    # Assuming config is standard
-    db_config = DatabaseConfig().config
-    # Handle password escaping if needed, but for now simple string
-    db_url = f"postgresql+psycopg2://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['dbname']}"
-    
-    engine = create_engine(db_url)
-    conn = engine.connect()
-    
     try:
         print("Loading data...")
-        # load_product_level_training_set expects a psycopg2 connection object usually, 
-        # but let's see if it works with sqlalchemy connection or if we need to pass the raw connection.
-        # The data_loader uses pd.read_sql(sql, conn, params=params).
-        # If conn is sqlalchemy connection, it should work better.
-        # However, data_loader also uses cursor() method on conn for other things?
-        # Let's check data_loader usage of conn.
-        # It uses `pd.read_sql(..., conn, ...)` and `fetch_top_terms(conn, ...)` which uses `conn.cursor()`.
-        # SQLAlchemy connection does not have `cursor()`.
-        # So we must pass a raw psycopg2 connection to `load_product_level_training_set`.
+        # load_product_level_training_set creates its own connection
+        result = load_product_level_training_set(
+            date_cutoff="2025-06-25",
+            label_strategy="absolute"
+        )
         
-        # So the issue is indeed why `pd.read_sql` fails with psycopg2 connection in debug script.
-        # Maybe I should just fix the data_loader to use sqlalchemy if possible, but that's a big change.
+        X_dense, X_tfidf, y, meta, vocab = result
         
-        # Let's try to pass the raw connection from engine.
-        raw_conn = engine.raw_connection()
-        
-        X, y, meta = load_product_level_training_set(raw_conn, label_strategy="absolute")
         print("Data loaded successfully.")
-        print("X columns:", X.columns.tolist())
+        print(f"X_dense shape: {X_dense.shape}")
+        print(f"X_tfidf shape: {X_tfidf.shape}")
+        print(f"y shape: {y.shape}")
+        print(f"meta shape: {meta.shape}")
+        
+        # Check for Kinematics features
+        kin_cols = ["kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs"]
+        print("\nChecking Kinematics Features:")
+        for col in kin_cols:
+            if col in X_dense.columns:
+                print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}, Max={X_dense[col].max():.4f}")
+            else:
+                print(f"  {col}: NOT FOUND!")
+
+        # Check for BERT features
+        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score"]
+        print("\nChecking BERT Features:")
+        for col in bert_cols:
+            if col in X_dense.columns:
+                print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}")
+            else:
+                print(f"  {col}: NOT FOUND!")
+                
+        print("\nSample Data (first 5 rows of Kinematics):")
+        if all(c in X_dense.columns for c in kin_cols):
+            print(X_dense[kin_cols].head())
         
     except Exception as e:
         print(f"Error: {e}")
-        import traceback
         traceback.print_exc()
-    finally:
-        conn.close()
 
 if __name__ == "__main__":
     main()

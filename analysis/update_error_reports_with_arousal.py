@@ -14,7 +14,8 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
     features = [
         "clean_arousal_score", "bert_arousal_mean", "bert_novelty_mean", 
         "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
-        "intensity_score", "validated_velocity", "is_mature_product"
+        "intensity_score", "validated_velocity", "is_mature_product",
+        "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs"
     ]
     
     # Calculate mean for each group
@@ -33,6 +34,14 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
 - **bert_negative_mean**: BERT 判定的負面抱怨機率。
 - **bert_advertisement_mean**: BERT 判定的廣告業配機率。
 - **bert_novelty_mean**: BERT 判定的新奇感機率。
+
+## Review Kinematics Analysis (New)
+
+引入「評論動力學」特徵，捕捉評論流量的物理變化：
+
+- **Velocity ($v$)**: `kin_v_1` (近7天), `kin_v_2` (前7-14天)。
+- **Acceleration ($a$)**: `kin_acc_abs` ($v_1 - v_2$)。正值代表評論量加速增長。
+- **Jerk ($j$)**: `kin_jerk_abs` ($v_1 - 2v_2 + v_3$)。加速度的變化率，預期能捕捉爆發瞬間。
 
 ### 特徵平均值比較 (Mean Values by Group)
 
@@ -53,6 +62,12 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
         tp_ad = stats.loc["TP", "bert_advertisement_mean"] if "TP" in stats.index else 0
         fp_ad = stats.loc["FP", "bert_advertisement_mean"] if "FP" in stats.index else 0
 
+        tp_acc = stats.loc["TP", "kin_acc_abs"] if "TP" in stats.index else 0
+        fn_acc = stats.loc["FN", "kin_acc_abs"] if "FN" in stats.index else 0
+        
+        tp_jerk = stats.loc["TP", "kin_jerk_abs"] if "TP" in stats.index else 0
+        fn_jerk = stats.loc["FN", "kin_jerk_abs"] if "FN" in stats.index else 0
+
         if tp_clean > fp_clean:
             md_content += f"- **Clean Arousal 有效**：TP 的 Clean Arousal ({tp_clean:.4f}) 高於 FP ({fp_clean:.4f})，顯示過濾負評與廣告後，驚豔感更能代表真實爆品。\n"
         else:
@@ -63,6 +78,12 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
             
         if fp_ad > tp_ad:
             md_content += f"- **廣告偵測驗證**：FP 的廣告分數 ({fp_ad:.4f}) 高於 TP ({tp_ad:.4f})，證實部分 FP 來自於業配或廣告文案。\n"
+
+        if tp_acc > fn_acc:
+            md_content += f"- **加速度 (Acceleration) 有效**：TP 的加速度 ({tp_acc:.4f}) 顯著高於 FN ({fn_acc:.4f})，顯示爆品具有更強的評論增長動能。\n"
+        
+        if tp_jerk > fn_jerk:
+            md_content += f"- **急動度 (Jerk) 有效**：TP 的 Jerk ({tp_jerk:.4f}) 高於 FN ({fn_jerk:.4f})，成功捕捉到爆發瞬間的非線性增長。\n"
 
     except Exception as e:
         md_content += f"- (無法自動生成結論: {e})\n"

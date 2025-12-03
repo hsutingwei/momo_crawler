@@ -459,13 +459,6 @@ def load_product_level_training_set(
               CASE
                 WHEN batch_time > %(cutoff)s::timestamp
                      AND prev_sales IS NOT NULL
-                     -- 【級距差異說明】銷售級距是離散 bucket：0, 1, 5, 10, 20, 30, 50, 100, 500, 1000, ...
-                     -- 相鄰級距差距：0→1(1), 1→5(4), 5→10(5), 10→20(10), 20→30(10), 30→50(20), 50→100(50), ...
-                     -- 當 delta_threshold=12 時：
-                     --   - 低級距商品（<30）：相鄰級距差距都 < 12，需要一次跳兩級以上才會滿足條件（例如 5→20, 10→30）
-                     --   - 高級距商品（≥30）：相鄰級距差距都 ≥ 12，一次跳一級就會被視為「大成長」（例如 30→50, 50→100）
-                     -- 這是一個相對「保守，只抓大成長」的設計，對低級距商品更嚴格
-                     -- 【未來調整點】可以考慮階梯式門檻（見 data_loader.py 中的 compute_adaptive_delta_threshold 函數）
                      AND (sales_count - prev_sales) >= %(delta_threshold)s
                      AND (
                           %(ratio_threshold)s IS NULL
@@ -512,7 +505,6 @@ def load_product_level_training_set(
         WHERE product_id <> ALL(%(excluded)s)
         """
         elif label_mode == "fixed_window":
-            # fixed_window 模式：取消 cutoff 过滤，返回所有数据用于 time-based split
             sql_y = """
         WITH comment_batches AS (
           SELECT p.keyword, pc.product_id, pc.capture_time AS batch_time
@@ -555,25 +547,11 @@ def load_product_level_training_set(
         y_post AS (
           SELECT
             cb.product_id,
-            -- 【重要】使用 MIN(batch_time) 作為 representative_batch_time，用於 time-based split
-            -- 設計理由：每個商品可能有多個 batch_time，選擇最早的可以確保該商品的所有歷史資訊都在訓練集中
-            -- 避免同一個商品同時出現在訓練集和測試集，造成 data leakage
-            -- 【潛在問題】如果某個商品的 batch_time 分布不均，可能會導致 time-based split 時某些時間區間沒有樣本
             MIN(cb.batch_time) AS representative_batch_time,
             MAX(
               CASE
                 WHEN cb.prev_sales IS NULL THEN 0
                 WHEN fs.future_max_sales IS NULL THEN 0
-                -- 【級距差異說明】銷售級距是離散 bucket：0, 1, 5, 10, 20, 30, 50, 100, ...
-                -- 相鄰級距差距：0→1(1), 1→5(4), 5→10(5), 10→20(10), 20→30(10), 30→50(20), 50→100(50), ...
-                -- 當 delta_threshold=12 時：
-                --   - 低級距商品（<30）：相鄰級距差距都 < 12，需要一次跳兩級以上才會滿足條件（例如 5→20, 10→30）
-                --   - 高級距商品（≥30）：相鄰級距差距都 ≥ 12，一次跳一級就會被視為「大成長」（例如 30→50, 50→100）
-                -- 這是一個相對「保守，只抓大成長」的設計，對低級距商品更嚴格
-                -- 【未來調整點】可以考慮：
-                --   1. 低級距用較小的 delta 門檻（例如 delta=5 for sales < 30）
-                --   2. 或用「跳幾級」來定義成長，而不是死用固定 delta
-                --   3. 在 label_delta_threshold 參數中預留階梯式門檻的接口
                 WHEN (fs.future_max_sales - cb.prev_sales) >= %(delta_threshold)s
                      AND (
                           %(ratio_threshold)s IS NULL
@@ -617,14 +595,12 @@ def load_product_level_training_set(
                 y_df = pd.DataFrame(columns=["product_id", "y", "representative_batch_time"])
             else:
                 y_df = pd.DataFrame(columns=["product_id", "y"])
-        # 确保 representative_batch_time 存在（fixed_window 模式）
+        
         if label_mode == "fixed_window" and "representative_batch_time" not in y_df.columns:
             y_df["representative_batch_time"] = None
 
-        # 在 fixed_window 模式下，取消 cutoff 过滤以支持 time-based split
-        # Modified to use comment_date for cutoff filtering to ensure we include all comments posted before cutoff,
-        # even if captured later (assuming they would have been visible).
         cutoff_filter = "" if label_mode == "fixed_window" else "WHERE pc.comment_date <= %(cutoff)s::date"
+        
         sql_dense = f"""
         WITH pre_comments AS (
           SELECT pc.*, p.name, p.price::float AS price, p.keyword,
@@ -685,7 +661,17 @@ def load_product_level_training_set(
             AVG(score_novelty) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_novelty_mean,
             AVG(score_repurchase) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_repurchase_mean,
             AVG(score_negative) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_negative_mean,
-            AVG(score_advertisement) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_advertisement_mean
+            AVG(score_advertisement) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS bert_advertisement_mean,
+
+            -- Review Kinematics (Velocity Windows)
+            -- W1 (Current): [cutoff-7d, cutoff]
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '7 days') AS kin_v_1,
+            -- W2 (Previous): [cutoff-14d, cutoff-7d)
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '14 days' 
+                               AND comment_date < %(cutoff)s::date - INTERVAL '7 days') AS kin_v_2,
+            -- W3 (Baseline): [cutoff-21d, cutoff-14d)
+            COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '21 days' 
+                               AND comment_date < %(cutoff)s::date - INTERVAL '14 days') AS kin_v_3
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -781,6 +767,9 @@ def load_product_level_training_set(
           COALESCE(m.bert_repurchase_mean,0) AS bert_repurchase_mean,
           COALESCE(m.bert_negative_mean,0) AS bert_negative_mean,
           COALESCE(m.bert_advertisement_mean,0) AS bert_advertisement_mean,
+          COALESCE(m.kin_v_1, 0) AS kin_v_1,
+          COALESCE(m.kin_v_2, 0) AS kin_v_2,
+          COALESCE(m.kin_v_3, 0) AS kin_v_3,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -798,60 +787,89 @@ def load_product_level_training_set(
             "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
             "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
+            "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
             "has_image_urls", "has_video_url", "has_reply_content",
-            "had_any_change_pre", "num_increases_pre"
+            "had_any_change_pre", "num_increases_pre",
+            "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
         ]
         
-        for c in dense_cols:
-            if c not in dense.columns:
-                dense[c] = 0
+        # Remove duplicate columns if any (safety check)
+        df = dense.merge(y_df, on="product_id", how="left")
+        df = df.loc[:, ~df.columns.duplicated()]
         
-        dense = dense.fillna(0)
+        # Ensure new columns exist in df (init with 0 if not present, though SQL should provide them)
+        for c in ["kin_v_1", "kin_v_2", "kin_v_3"]:
+            if c not in df.columns:
+                df[c] = 0
+        
+        # ====================== Review Kinematics Feature Engineering ======================
+        # 1. Velocity (v): Already loaded as kin_v_1, kin_v_2, kin_v_3
+        
+        # 2. Acceleration (a)
+        # Absolute Acceleration: v1 - v2
+        df["kin_acc_abs"] = df["kin_v_1"] - df["kin_v_2"]
+        
+        # Relative Acceleration: (log(v1) - log(v2)) / (log(v2) + 1)
+        # Using log1p to handle sparsity and high variance as requested
+        v1_log = np.log1p(df["kin_v_1"])
+        v2_log = np.log1p(df["kin_v_2"])
+        df["kin_acc_rel"] = (v1_log - v2_log) / (v2_log + 1)
+        
+        # 3. Jerk (j)
+        # Physical Jerk: v1 - 2*v2 + v3 (Rate of change of acceleration)
+        # Using raw counts for physical jerk to detect massive spikes
+        df["kin_jerk_abs"] = df["kin_v_1"] - 2 * df["kin_v_2"] + df["kin_v_3"]
+        
+        # ====================== Existing Feature Engineering ======================
         
         # Calculate Ratios
-        dense["comment_7d_ratio"] = dense["comment_count_7d"] / (dense["comment_count_pre"] + 1)
-        dense["ratio_recent30_to_prev60"] = dense["comment_3rd_30d"] / (dense["comment_1st_30d"] + dense["comment_2nd_30d"] + 1e-6)
+        df["comment_7d_ratio"] = df["comment_count_7d"] / (df["comment_count_pre"] + 1)
+        df["ratio_recent30_to_prev60"] = df["comment_3rd_30d"] / (df["comment_1st_30d"] + df["comment_2nd_30d"] + 1e-6)
 
         # Content Ratios
-        denom = dense["comment_count_90d"] + 1
-        dense["neg_ratio_recent"] = dense["neg_count_recent"] / denom
-        dense["promo_ratio_recent"] = dense["promo_count_recent"] / denom
+        denom = df["comment_count_90d"] + 1
+        df["neg_ratio_recent"] = df["neg_count_recent"] / denom
+        df["promo_ratio_recent"] = df["promo_count_recent"] / denom
         
         # BERT-based Ratios & Scores
         # We use the mean probability directly as the "ratio" or "score"
-        dense["arousal_ratio"] = dense["bert_arousal_mean"]
-        dense["novelty_ratio"] = dense["bert_novelty_mean"]
-        dense["repurchase_ratio_recent"] = dense["bert_repurchase_mean"]
+        df["arousal_ratio"] = df["bert_arousal_mean"]
+        df["novelty_ratio"] = df["bert_novelty_mean"]
+        df["repurchase_ratio_recent"] = df["bert_repurchase_mean"]
         
         # Clean Arousal Score: Arousal * (1 - Negative) * (1 - Advertisement)
         # Logic: True arousal should not be angry or fake.
-        dense["clean_arousal_score"] = dense["bert_arousal_mean"] * (1 - dense["bert_negative_mean"]) * (1 - dense["bert_advertisement_mean"])
+        df["clean_arousal_score"] = df["bert_arousal_mean"] * (1 - df["bert_negative_mean"]) * (1 - df["bert_advertisement_mean"])
         
         # Intensity Score (Updated)
         # Use clean_arousal_score instead of raw arousal_ratio
-        dense["intensity_score"] = (dense["clean_arousal_score"] + dense["bert_novelty_mean"]) / (dense["bert_repurchase_mean"] + 0.1)
+        df["intensity_score"] = (df["clean_arousal_score"] + df["bert_novelty_mean"]) / (df["bert_repurchase_mean"] + 0.1)
         
         # ====================== Interaction Features (Cross Features) ======================
         # 1. Validated Velocity: Acceleration * log1p(Volume)
         # Rationale: Acceleration with very few comments is unstable.
-        dense["validated_velocity"] = dense["ratio_recent30_to_prev60"] * np.log1p(dense["comment_3rd_30d"])
+        df["validated_velocity"] = df["ratio_recent30_to_prev60"] * np.log1p(df["comment_3rd_30d"])
         
         # 2. Price Weighted Arousal: Arousal * log1p(Price)
         # Rationale: FP has high arousal but low price. TP has higher price.
-        dense["price_weighted_arousal"] = dense["clean_arousal_score"] * np.log1p(dense["price"])
+        df["price_weighted_arousal"] = df["clean_arousal_score"] * np.log1p(df["price"])
         
         # 3. Novelty Momentum: Acceleration * (1 - Repurchase Ratio)
         # Rationale: High acceleration driven by NEW people.
-        dense["novelty_momentum"] = dense["ratio_recent30_to_prev60"] * (1 - dense["repurchase_ratio_recent"])
+        df["novelty_momentum"] = df["ratio_recent30_to_prev60"] * (1 - df["repurchase_ratio_recent"])
         
         # 4. Is Mature Product: Explicit Flag
         # Rationale: Help tree split "Old Hits" from "New Hits".
-        dense["is_mature_product"] = ((dense["comment_count_pre"] > 50) | (dense["repurchase_ratio_recent"] > 0.2)).astype(int)
+        df["is_mature_product"] = ((df["comment_count_pre"] > 50) | (df["repurchase_ratio_recent"] > 0.2)).astype(int)
 
         # Handle days_since_last_comment for items with no comments
-        dense.loc[dense["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
+        df.loc[df["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
+        
+        for c in dense_cols:
+            if c not in df.columns:
+                df[c] = 0
 
-        df = dense.merge(y_df, on="product_id", how="left")
+        X_dense = df[dense_cols].fillna(0).astype(float)
         
         # ====================== Multiclass Label Logic ======================
         if label_strategy == "multiclass":
@@ -898,25 +916,11 @@ def load_product_level_training_set(
         df["y"] = df["y"].fillna(0).astype(int)
 
         # ====================== Keyword 篩選邏輯 ======================
-        # 【設計理由】排除特定 keyword 的原因：
-        # - 「口罩」：在 2020-2021 年 COVID-19 期間，口罩商品的銷售模式極度異常
-        #   （大量囤貨、政府配給、價格波動劇烈），與一般消費商品的評論-銷售關聯模式差異過大
-        #   若納入訓練會導致模型學習到異常模式，影響對正常商品的預測能力
-        # - 未來若要調整 blacklist，請修改此處的註解說明，並確保：
-        #   1. DB 中 products.keyword 欄位的實際值（可用 SQL: SELECT DISTINCT keyword FROM products）
-        #   2. CLI 參數 --keyword-blacklist 傳入的值
-        #   3. 此處比對時使用的值
-        #   三者編碼一致（建議統一使用 UTF-8）
-        
         if keyword_whitelist:
             df = df[df["keyword"].isin(keyword_whitelist)]
         if keyword_blacklist:
-            # 【編碼修正】確保 blacklist 中的關鍵字編碼正確
-            # 將可能的亂碼修正為正確的 UTF-8 編碼
-            # 常見問題：Windows 系統預設編碼（cp950/cp936）可能導致中文字符亂碼
             normalized_blacklist = []
             for kw in keyword_blacklist:
-                # 修正已知的亂碼問題
                 if kw == "??蔗" or kw == "??" or (isinstance(kw, bytes) and b'\xbf\xbf' in kw):
                     normalized_kw = "口罩"
                 else:
@@ -934,7 +938,6 @@ def load_product_level_training_set(
                                 min_len=2, max_len=4)
 
         if vocab:
-            # 在 fixed_window 模式下，取消 cutoff 过滤
             cutoff_where = "" if label_mode == "fixed_window" else "WHERE pc.capture_time <= %(cutoff)s::timestamp"
             sql_pairs = f"""
             WITH vocab AS (
@@ -953,19 +956,15 @@ def load_product_level_training_set(
         else:
             pairs = pd.DataFrame(columns=["product_id", "token"])
 
-        # 在 fixed_window 模式下，meta 需要包含 representative_batch_time 用于 time-based split
         if label_mode == "fixed_window" and "representative_batch_time" in y_df.columns:
             meta = df[["product_id", "name", "keyword"]].copy()
-            # 合并 representative_batch_time
             meta = meta.merge(y_df[["product_id", "representative_batch_time"]], on="product_id", how="left")
-            # 确保时间格式正确
             if "representative_batch_time" in meta.columns:
                 meta["representative_batch_time"] = pd.to_datetime(meta["representative_batch_time"], utc=True)
         else:
             meta = df[["product_id", "name", "keyword"]].copy()
             
         if return_meta_details:
-            # Merge max_raw_delta and max_raw_ratio from y_df
             if "max_raw_delta" in y_df.columns:
                 meta = meta.merge(y_df[["product_id", "max_raw_delta", "max_raw_ratio"]], on="product_id", how="left")
         id_index = pd.Series(range(len(meta)), index=meta["product_id"])
@@ -982,23 +981,6 @@ def load_product_level_training_set(
             data = np.ones(len(pairs), dtype=np.int8)
             X_tfidf = coo_matrix((data, (rows, cols)),
                                  shape=(len(meta), len(vocab)), dtype=np.int8).tocsr()
-
-        dense_cols = [
-            "price",
-            "has_image_urls", "image_urls_count", "has_video_url",
-            "has_reply_content", "score_mean", "like_count_sum",
-            "had_any_change_pre", "num_increases_pre", "comment_count_pre",
-            "comment_count_7d", "comment_count_30d", "comment_count_90d", "days_since_last_comment", "comment_7d_ratio",
-            "comment_1st_30d", "comment_2nd_30d", "comment_3rd_30d", "ratio_recent30_to_prev60",
-            "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
-            "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
-            "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
-            "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
-        ]
-        # Remove duplicate columns if any (safety check)
-        df = df.loc[:, ~df.columns.duplicated()]
-
-        X_dense = df[dense_cols].fillna(0).astype(float)
 
         y = df["y"].astype(int)
 

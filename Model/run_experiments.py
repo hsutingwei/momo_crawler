@@ -245,6 +245,7 @@ def run_experiment(exp_config, output_dir):
                         "sentiment_mean_recent", "neg_ratio_recent", "promo_ratio_recent", "repurchase_ratio_recent",
                         "arousal_ratio", "novelty_ratio", "intensity_score", "clean_arousal_score",
                         "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
+                        "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
                         "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
                     ]
                     
