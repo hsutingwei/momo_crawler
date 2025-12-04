@@ -21,6 +21,12 @@ Models the "Prototypicality" of the product based on user feedback.
 *   **Hypothesis**: Viral hits receive "standard" positive feedback (High Fit), while non-hits have unique outliers or irrelevant noise (Low Fit).
 *   **Quality Driven Momentum**: `Acceleration * Category Fit`. Filters out high-speed items that lack quality consensus.
 
+### C. Psychological Signal (Diversity & Authenticity)
+**"Is it organic?"**
+Models the "Entropy" of user opinions to detect manufactured hype.
+*   **Semantic Entropy**: Measures the Shannon entropy of comment clusters.
+*   **Hypothesis**: Real viral hits generate a chaotic mix of opinions (High Entropy). Shill/Spam reviews are repetitive and formulaic (Low Entropy).
+
 ## 2. Key Results
 
 ### Model Performance

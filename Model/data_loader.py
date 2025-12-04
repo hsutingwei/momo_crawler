@@ -16,6 +16,9 @@ import psycopg2.extras
 from scipy.sparse import csr_matrix, coo_matrix, hstack
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_distances
+from sklearn.cluster import KMeans
+from scipy.stats import entropy
+import math
 
 # use same project path style as csv_to_db.py
 import sys
@@ -677,7 +680,20 @@ def load_product_level_training_set(
             
             -- Aggregated Comments for Semantic Novelty (A/B Test)
             -- Concatenate recent comments (last 90 days) to form a "product document"
-            STRING_AGG(comment_text, ' ') FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS aggregated_comments
+            STRING_AGG(comment_text, ' ') FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS aggregated_comments,
+            
+            -- Recent Comments JSON for Diversity & Burstiness Features
+            -- Get last 20 comments with text and date
+            (
+                SELECT json_agg(t) FROM (
+                    SELECT comment_text, comment_date
+                    FROM pre_comments pc2
+                    WHERE pc2.product_id = pre_comments.product_id
+                      AND pc2.comment_date >= %(cutoff)s::date - INTERVAL '90 days'
+                    ORDER BY pc2.comment_date DESC
+                    LIMIT 20
+                ) t
+            ) AS recent_comments_json
           FROM pre_comments
           GROUP BY product_id
         ),
@@ -777,6 +793,7 @@ def load_product_level_training_set(
           COALESCE(m.kin_v_2, 0) AS kin_v_2,
           COALESCE(m.kin_v_3, 0) AS kin_v_3,
           m.aggregated_comments,
+          m.recent_comments_json,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
         FROM products p
@@ -796,6 +813,7 @@ def load_product_level_training_set(
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
             "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
+            "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -879,6 +897,102 @@ def load_product_level_training_set(
         # Acceleration weighted by Category Fit.
         # Rationale: High acceleration is good, but only if the feedback is "standard/positive" (High Fit).
         df["quality_driven_momentum"] = df["kin_acc_abs"] * df["category_fit_score"]
+        
+        # ====================== Diversity & Organic Features (Psychological/Info-Theoretic) ======================
+        print("Computing Diversity & Organic Features...")
+        
+        # Initialize new columns
+        df["feat_semantic_entropy"] = 0.0
+        df["feat_temporal_burstiness"] = -1.0
+        df["feat_lexical_diversity"] = 0.0
+        
+        if "recent_comments_json" in df.columns:
+            # Pre-initialize vectorizer for semantic entropy
+            # Use small features for speed as we run this per product (or batch if possible, but per product is safer for logic)
+            # Actually, fitting vectorizer per product is slow. Better to use a global one or small one.
+            # But for Entropy, we need clusters *within* the product's reviews.
+            # So we vectorizer *only* the product's reviews to find internal clusters.
+            
+            for idx, row in df.iterrows():
+                comments_data = row["recent_comments_json"]
+                if not isinstance(comments_data, list) or len(comments_data) < 2:
+                    continue
+                
+                try:
+                    # Extract texts and dates
+                    texts = [c.get("comment_text", "") for c in comments_data if c.get("comment_text")]
+                    dates = [pd.to_datetime(c.get("comment_date")) for c in comments_data if c.get("comment_date")]
+                    
+                    if len(texts) < 2:
+                        continue
+                        
+                    # 1. Semantic Entropy (Meaning Diversity)
+                    # Logic: Cluster embeddings -> Calculate Entropy of cluster distribution
+                    try:
+                        tfidf_local = TfidfVectorizer(max_features=100, stop_words="english")
+                        X_local = tfidf_local.fit_transform(texts)
+                        
+                        n_clusters = min(len(texts), 5)
+                        if n_clusters > 1:
+                            kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+                            labels = kmeans.fit_predict(X_local)
+                            
+                            # Calculate probabilities of each cluster
+                            counts = np.bincount(labels)
+                            probs = counts / len(labels)
+                            
+                            # Calculate Entropy
+                            ent = entropy(probs, base=2)
+                            df.at[idx, "feat_semantic_entropy"] = ent
+                    except Exception as e:
+                        # print(f"Error semantic entropy: {e}")
+                        pass
+
+                    # 2. Temporal Burstiness (Human Pattern)
+                    # Logic: CoV of Inter-Arrival Times (IAT)
+                    if len(dates) >= 3:
+                        dates_sorted = sorted(dates)
+                        # Calculate IAT in seconds
+                        iats = [(dates_sorted[i+1] - dates_sorted[i]).total_seconds() for i in range(len(dates_sorted)-1)]
+                        iats = [x for x in iats if x > 0] # Filter zero IATs if any
+                        
+                        if len(iats) > 1:
+                            mean_iat = np.mean(iats)
+                            std_iat = np.std(iats)
+                            
+                            if mean_iat > 0:
+                                r = std_iat / mean_iat
+                                burstiness = (r - 1) / (r + 1)
+                                df.at[idx, "feat_temporal_burstiness"] = burstiness
+                    
+                    # 3. Lexical Diversity (Honore's R)
+                    # Logic: Unique words ratio
+                    try:
+                        all_text = " ".join(texts)
+                        tokens = all_text.split()
+                        N = len(tokens)
+                        if N > 0:
+                            vocab = set(tokens)
+                            V = len(vocab)
+                            # Count hapax legomena (words appearing exactly once)
+                            # Simple way:
+                            from collections import Counter
+                            counts = Counter(tokens)
+                            V1 = sum(1 for count in counts.values() if count == 1)
+                            
+                            if V > 0:
+                                # Handle edge case V1 == V (log(N) / epsilon) -> High diversity
+                                denominator = 1 - (V1 / V)
+                                if denominator == 0:
+                                    denominator = 0.0001
+                                
+                                R = (100 * math.log(N)) / denominator
+                                df.at[idx, "feat_lexical_diversity"] = R
+                    except Exception as e:
+                        pass
+                        
+                except Exception as e:
+                    print(f"Error computing diversity features for product {row.get('product_id')}: {e}")
         
         # ====================== Existing Feature Engineering ======================
         

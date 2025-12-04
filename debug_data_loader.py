@@ -29,10 +29,10 @@ def main():
             else:
                 print(f"  {col}: NOT FOUND!")
 
-        # Check for BERT features
-        bert_cols = ["bert_arousal_mean", "clean_arousal_score", "intensity_score", "category_fit_score", "quality_driven_momentum"]
-        print("\nChecking BERT & Novelty Features:")
-        for col in bert_cols:
+        # Check for Diversity & Organic Features
+        div_cols = ["feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity"]
+        print("\nChecking Diversity & Organic Features:")
+        for col in div_cols:
             if col in X_dense.columns:
                 print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}, Max={X_dense[col].max():.4f}")
             else:

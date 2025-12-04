@@ -296,6 +296,7 @@ def run_experiment(exp_config, output_dir):
                         "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
                         "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
                         "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
+                        "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
                         "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
                     ]
                     
