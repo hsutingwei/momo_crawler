@@ -691,7 +691,7 @@ def load_product_level_training_set(
                     WHERE pc2.product_id = pre_comments.product_id
                       AND pc2.comment_date >= %(cutoff)s::date - INTERVAL '90 days'
                     ORDER BY pc2.comment_date DESC
-                    LIMIT 20
+                    LIMIT 100
                 ) t
             ) AS recent_comments_json
           FROM pre_comments
