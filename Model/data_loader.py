@@ -814,6 +814,7 @@ def load_product_level_training_set(
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
             "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
             "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
+            "authentic_momentum", "spam_risk_score",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -994,6 +995,25 @@ def load_product_level_training_set(
                 except Exception as e:
                     print(f"Error computing diversity features for product {row.get('product_id')}: {e}")
         
+        # ====================== Final Fusion Features (Smoothed Interaction) ======================
+        # 1. Authentic Momentum (The Gold Standard)
+        # Logic: Acceleration * Quality * Organic
+        # Add +0.5 smoothing to Quality/Organic to allow new items (score 0) to still have momentum
+        # We use fillna(0) just in case, though we initialized with 0.
+        quality_factor = df['category_fit_score'].fillna(0) + 0.5
+        organic_factor = df['feat_semantic_entropy'].fillna(0) + 0.5
+        
+        df['authentic_momentum'] = df['kin_acc_abs'] * quality_factor * organic_factor
+        
+        # 2. Spam Risk Score (The FP Killer)
+        # Logic: High Acceleration but Low Entropy (suspicious)
+        # Only penalize if item HAS comments (>5) but LOW entropy (<0.5)
+        # Note: feat_semantic_entropy is 0 for items with < 2 comments, so we must check comment_count > 5
+        # to avoid flagging new items as spam.
+        risk_mask = (df['comment_count_90d'] > 5) & (df['feat_semantic_entropy'] < 0.5)
+        df['spam_risk_score'] = 0.0
+        df.loc[risk_mask, 'spam_risk_score'] = df.loc[risk_mask, 'kin_acc_abs']
+
         # ====================== Existing Feature Engineering ======================
         
         # Calculate Ratios

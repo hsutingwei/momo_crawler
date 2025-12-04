@@ -167,6 +167,13 @@ def run_experiment(exp_config, output_dir):
                 use_label_encoder=False
             )
         else:
+            # GPU Optimization
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            tree_method = "hist" if device == "cuda" else "auto"
+            if device == "cuda":
+                print(f"  [Fold {fold}] XGBoost using GPU: {device}")
+
             model = XGBClassifier(
                 n_estimators=100,
                 learning_rate=0.05,
@@ -176,7 +183,9 @@ def run_experiment(exp_config, output_dir):
                 eval_metric="logloss",
                 use_label_encoder=False,
                 scale_pos_weight=scale_pos_weight,
-                monotone_constraints=monotone_constraints
+                monotone_constraints=monotone_constraints,
+                device=device,
+                tree_method=tree_method
             )
         
         try:
@@ -297,6 +306,7 @@ def run_experiment(exp_config, output_dir):
                         "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
                         "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
                         "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
+                        "authentic_momentum", "spam_risk_score",
                         "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
                     ]
                     

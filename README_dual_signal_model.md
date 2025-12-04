@@ -27,6 +27,12 @@ Models the "Entropy" of user opinions to detect manufactured hype.
 *   **Semantic Entropy**: Measures the Shannon entropy of comment clusters.
 *   **Hypothesis**: Real viral hits generate a chaotic mix of opinions (High Entropy). Shill/Spam reviews are repetitive and formulaic (Low Entropy).
 
+### D. Final Fusion (Smoothed Interaction)
+**"The Verdict"**
+Combines all signals into a single robust metric.
+*   **Authentic Momentum**: `Acceleration * (Category Fit + 0.5) * (Entropy + 0.5)`.
+*   **Goal**: Preserves momentum for cold-start items (via smoothing) while amplifying high-quality, organic hits.
+
 ## 2. Key Results
 
 ### Model Performance

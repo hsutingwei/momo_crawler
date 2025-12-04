@@ -17,7 +17,8 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
         "intensity_score", "validated_velocity", "is_mature_product",
         "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
         "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
-        "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity"
+        "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
+        "authentic_momentum", "spam_risk_score"
     ]
     
     # Calculate mean for each group
