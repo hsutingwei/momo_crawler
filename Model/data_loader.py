@@ -19,6 +19,12 @@ from sklearn.metrics.pairwise import cosine_distances
 from sklearn.cluster import KMeans
 from scipy.stats import entropy
 import math
+import torch
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    print("Warning: sentence_transformers not installed. SBERT features will be skipped.")
+    SentenceTransformer = None
 
 # use same project path style as csv_to_db.py
 import sys
@@ -813,8 +819,8 @@ def load_product_level_training_set(
             "bert_arousal_mean", "bert_novelty_mean", "bert_repurchase_mean", "bert_negative_mean", "bert_advertisement_mean",
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
             "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
-            "feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity",
-            "authentic_momentum", "spam_risk_score",
+            "feat_entropy_tfidf", "feat_entropy_emb", "feat_temporal_burstiness", "feat_lexical_diversity",
+            "momentum_tfidf", "momentum_emb", "spam_risk_score",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
             "validated_velocity", "price_weighted_arousal", "novelty_momentum", "is_mature_product"
@@ -900,19 +906,27 @@ def load_product_level_training_set(
         df["quality_driven_momentum"] = df["kin_acc_abs"] * df["category_fit_score"]
         
         # ====================== Diversity & Organic Features (Psychological/Info-Theoretic) ======================
-        print("Computing Diversity & Organic Features...")
+        print("Computing Diversity & Organic Features (TF-IDF vs SBERT)...")
         
         # Initialize new columns
-        df["feat_semantic_entropy"] = 0.0
+        df["feat_entropy_tfidf"] = 0.0
+        df["feat_entropy_emb"] = 0.0
         df["feat_temporal_burstiness"] = -1.0
         df["feat_lexical_diversity"] = 0.0
         
+        # Initialize SBERT model if available
+        sbert_model = None
+        if SentenceTransformer:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"Loading SBERT model on {device}...")
+            try:
+                sbert_model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
+            except Exception as e:
+                print(f"Failed to load SBERT model: {e}")
+        
         if "recent_comments_json" in df.columns:
-            # Pre-initialize vectorizer for semantic entropy
-            # Use small features for speed as we run this per product (or batch if possible, but per product is safer for logic)
-            # Actually, fitting vectorizer per product is slow. Better to use a global one or small one.
-            # But for Entropy, we need clusters *within* the product's reviews.
-            # So we vectorizer *only* the product's reviews to find internal clusters.
+            # Pre-initialize vectorizer for semantic entropy (TF-IDF)
+            # We fit per product for TF-IDF to find internal clusters
             
             for idx, row in df.iterrows():
                 comments_data = row["recent_comments_json"]
@@ -927,8 +941,7 @@ def load_product_level_training_set(
                     if len(texts) < 2:
                         continue
                         
-                    # 1. Semantic Entropy (Meaning Diversity)
-                    # Logic: Cluster embeddings -> Calculate Entropy of cluster distribution
+                    # 1. Semantic Entropy (TF-IDF) - The Baseline
                     try:
                         tfidf_local = TfidfVectorizer(max_features=100, stop_words="english")
                         X_local = tfidf_local.fit_transform(texts)
@@ -938,36 +951,47 @@ def load_product_level_training_set(
                             kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
                             labels = kmeans.fit_predict(X_local)
                             
-                            # Calculate probabilities of each cluster
                             counts = np.bincount(labels)
                             probs = counts / len(labels)
-                            
-                            # Calculate Entropy
                             ent = entropy(probs, base=2)
-                            df.at[idx, "feat_semantic_entropy"] = ent
+                            df.at[idx, "feat_entropy_tfidf"] = ent
                     except Exception as e:
-                        # print(f"Error semantic entropy: {e}")
                         pass
 
-                    # 2. Temporal Burstiness (Human Pattern)
-                    # Logic: CoV of Inter-Arrival Times (IAT)
+                    # 2. Semantic Entropy (SBERT) - The Challenger
+                    if sbert_model:
+                        try:
+                            # Encode texts
+                            embeddings = sbert_model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+                            
+                            n_clusters = min(len(texts), 5)
+                            if n_clusters > 1:
+                                kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+                                labels = kmeans.fit_predict(embeddings)
+                                
+                                counts = np.bincount(labels)
+                                probs = counts / len(labels)
+                                ent = entropy(probs, base=2)
+                                df.at[idx, "feat_entropy_emb"] = ent
+                        except Exception as e:
+                            # print(f"Error SBERT entropy: {e}")
+                            pass
+
+                    # 3. Temporal Burstiness
                     if len(dates) >= 3:
                         dates_sorted = sorted(dates)
-                        # Calculate IAT in seconds
                         iats = [(dates_sorted[i+1] - dates_sorted[i]).total_seconds() for i in range(len(dates_sorted)-1)]
-                        iats = [x for x in iats if x > 0] # Filter zero IATs if any
+                        iats = [x for x in iats if x > 0]
                         
                         if len(iats) > 1:
                             mean_iat = np.mean(iats)
                             std_iat = np.std(iats)
-                            
                             if mean_iat > 0:
                                 r = std_iat / mean_iat
                                 burstiness = (r - 1) / (r + 1)
                                 df.at[idx, "feat_temporal_burstiness"] = burstiness
                     
-                    # 3. Lexical Diversity (Honore's R)
-                    # Logic: Unique words ratio
+                    # 4. Lexical Diversity
                     try:
                         all_text = " ".join(texts)
                         tokens = all_text.split()
@@ -975,18 +999,14 @@ def load_product_level_training_set(
                         if N > 0:
                             vocab = set(tokens)
                             V = len(vocab)
-                            # Count hapax legomena (words appearing exactly once)
-                            # Simple way:
                             from collections import Counter
                             counts = Counter(tokens)
                             V1 = sum(1 for count in counts.values() if count == 1)
                             
                             if V > 0:
-                                # Handle edge case V1 == V (log(N) / epsilon) -> High diversity
                                 denominator = 1 - (V1 / V)
                                 if denominator == 0:
                                     denominator = 0.0001
-                                
                                 R = (100 * math.log(N)) / denominator
                                 df.at[idx, "feat_lexical_diversity"] = R
                     except Exception as e:
@@ -995,22 +1015,23 @@ def load_product_level_training_set(
                 except Exception as e:
                     print(f"Error computing diversity features for product {row.get('product_id')}: {e}")
         
-        # ====================== Final Fusion Features (Smoothed Interaction) ======================
-        # 1. Authentic Momentum (The Gold Standard)
-        # Logic: Acceleration * Quality * Organic
-        # Add +0.5 smoothing to Quality/Organic to allow new items (score 0) to still have momentum
-        # We use fillna(0) just in case, though we initialized with 0.
+        # ====================== Final Fusion Features (Dual Interaction) ======================
+        # Baseline Momentum (TF-IDF)
         quality_factor = df['category_fit_score'].fillna(0) + 0.5
-        organic_factor = df['feat_semantic_entropy'].fillna(0) + 0.5
+        organic_factor_tfidf = df['feat_entropy_tfidf'].fillna(0) + 0.5
+        df['momentum_tfidf'] = df['kin_acc_abs'] * quality_factor * organic_factor_tfidf
         
-        df['authentic_momentum'] = df['kin_acc_abs'] * quality_factor * organic_factor
+        # Challenger Momentum (SBERT)
+        organic_factor_emb = df['feat_entropy_emb'].fillna(0) + 0.5
+        df['momentum_emb'] = df['kin_acc_abs'] * quality_factor * organic_factor_emb
         
-        # 2. Spam Risk Score (The FP Killer)
-        # Logic: High Acceleration but Low Entropy (suspicious)
-        # Only penalize if item HAS comments (>5) but LOW entropy (<0.5)
-        # Note: feat_semantic_entropy is 0 for items with < 2 comments, so we must check comment_count > 5
-        # to avoid flagging new items as spam.
-        risk_mask = (df['comment_count_90d'] > 5) & (df['feat_semantic_entropy'] < 0.5)
+        # Spam Risk Score (Using SBERT entropy as it should be more accurate)
+        # Or maybe keep using TF-IDF for now? Let's use SBERT if available, else TF-IDF.
+        # Actually, let's stick to SBERT for risk score if we trust it more.
+        # But to be safe, let's use the MAX of both entropies? No, MIN is riskier.
+        # Let's use SBERT entropy for the risk score as the "Challenger" test.
+        risk_entropy = df['feat_entropy_emb'] if sbert_model else df['feat_entropy_tfidf']
+        risk_mask = (df['comment_count_90d'] > 5) & (risk_entropy < 0.5)
         df['spam_risk_score'] = 0.0
         df.loc[risk_mask, 'spam_risk_score'] = df.loc[risk_mask, 'kin_acc_abs']
 

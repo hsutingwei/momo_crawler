@@ -26,23 +26,14 @@ def main():
         for col in kin_cols:
             if col in X_dense.columns:
                 print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}, Max={X_dense[col].max():.4f}")
-            else:
-                print(f"  {col}: NOT FOUND!")
-
         # Check for Diversity & Organic Features
-        div_cols = ["feat_semantic_entropy", "feat_temporal_burstiness", "feat_lexical_diversity"]
         print("\nChecking Diversity & Organic Features:")
-        for col in div_cols:
+        for col in ["feat_entropy_tfidf", "feat_entropy_emb", "feat_temporal_burstiness", "feat_lexical_diversity", "momentum_tfidf", "momentum_emb"]:
             if col in X_dense.columns:
                 print(f"  {col}: Found. Mean={X_dense[col].mean():.4f}, Max={X_dense[col].max():.4f}")
             else:
-                print(f"  {col}: NOT FOUND!")
-        
-        # Check aggregated_comments in the internal dataframe if accessible
-        if "category_fit_score" in X_dense.columns:
-             non_zero = (X_dense["category_fit_score"] > 0).sum()
-             print(f"\nCategory Fit Score Non-Zero Count: {non_zero} / {len(X_dense)}")
-             
+                print(f"  {col}: NOT FOUND")
+
         # Analyze comment_count_90d distribution
         if "comment_count_90d" in X_dense.columns:
             print("\nComment Count (90d) Distribution:")
