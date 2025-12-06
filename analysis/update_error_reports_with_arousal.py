@@ -18,6 +18,7 @@ def generate_arousal_analysis(csv_path, output_md_path, experiment_name):
         "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
         "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
         "feat_entropy_tfidf", "feat_entropy_emb", "feat_temporal_burstiness", "feat_lexical_diversity",
+        "feat_compression_ratio", "feat_ncd_spam",
         "momentum_tfidf", "momentum_emb", "spam_risk_score"
     ]
     

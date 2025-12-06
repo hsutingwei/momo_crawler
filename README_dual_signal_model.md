@@ -30,21 +30,6 @@ Models the "Entropy" of user opinions to detect manufactured hype.
 
 ### D. Final Fusion (Smoothed Interaction)
 **"The Verdict"**
-Combines all signals into a single robust metric.
-*   **Authentic Momentum**: `Acceleration * (Category Fit + 0.5) * (Entropy_SBERT + 0.5)`.
-*   **Goal**: Preserves momentum for cold-start items (via smoothing) while amplifying high-quality, organic hits.
-
-## 2. Key Results
-
-### Model Performance
-*   **AUC**: **0.8498** (Best Performance).
-*   **F1 Score**: **0.2826** (Improved).
-
-### Feature Insights
-1.  **Kinematics (Physical)**:
-    *   **Crucial for False Negatives**: Missed hits (FN) have the **highest Acceleration (0.18)**.
-    *   **Optimization**: We successfully forced the model to respect this signal using Monotonic Constraints and a Hybrid Rule (`Jerk > 0.1`).
-
 2.  **Semantic Novelty (Algorithm)**:
     *   **High Baseline**: Most products have a high novelty score (~0.89).
     *   **Subtle Signal**: While not a silver bullet on its own, adding it contributed to the overall AUC improvement.

@@ -20,11 +20,31 @@ from sklearn.cluster import KMeans
 from scipy.stats import entropy
 import math
 import torch
+import zlib  # Added for NCD features
+
 try:
     from sentence_transformers import SentenceTransformer
 except ImportError:
     print("Warning: sentence_transformers not installed. SBERT features will be skipped.")
     SentenceTransformer = None
+
+# Mined from DB Analysis (Top frequent templates on Momo)
+SPAM_REFERENCES = [
+    "👍👍👍👍👍👍👍👍👍👍",
+    "商品包裝完整，出貨速度快速。",
+    "出貨快速，包裝完整。",
+    "出貨速度快，包裝完整。",
+    "出貨速度快，包裝完整",
+    "商品品質不錯 價格合理 送貨速度可以 推薦~",
+    "出貨速度快，價格便宜！",
+    "出貨速度快，商品包裝完整",
+    "商品不錯喔，已回購多次，物美價廉",
+    "出貨速度超快",
+]
+# Pre-compute the compressed reference for efficiency
+REF_CONCAT = " ".join(SPAM_REFERENCES)
+REF_BYTES = REF_CONCAT.encode('utf-8')
+LEN_C_REF = len(zlib.compress(REF_BYTES))
 
 # use same project path style as csv_to_db.py
 import sys
@@ -820,6 +840,7 @@ def load_product_level_training_set(
             "kin_v_1", "kin_v_2", "kin_v_3", "kin_acc_abs", "kin_acc_rel", "kin_jerk_abs",
             "early_bird_momentum", "category_fit_score", "quality_driven_momentum",
             "feat_entropy_tfidf", "feat_entropy_emb", "feat_temporal_burstiness", "feat_lexical_diversity",
+            "feat_compression_ratio", "feat_ncd_spam",
             "momentum_tfidf", "momentum_emb", "spam_risk_score",
             "has_image_urls", "has_video_url", "has_reply_content",
             "had_any_change_pre", "num_increases_pre",
@@ -1015,6 +1036,43 @@ def load_product_level_training_set(
                 except Exception as e:
                     print(f"Error computing diversity features for product {row.get('product_id')}: {e}")
         
+        # ====================== Compression & NCD Features (Spam Detection) ======================
+        print("Computing Compression & NCD Features...")
+        df["feat_compression_ratio"] = 1.0
+        df["feat_ncd_spam"] = 1.0
+        
+        for idx, row in df.iterrows():
+            try:
+                # Use aggregated_comments (all comments concatenated)
+                text = row.get("aggregated_comments", "")
+                if not isinstance(text, str) or len(text) < 10:
+                    continue
+                
+                # 1. Compression Ratio
+                # Logic: len(original) / len(compressed)
+                # High ratio = Low information density (repetitive/spam)
+                original_bytes = text.encode('utf-8')
+                compressed_bytes = zlib.compress(original_bytes)
+                if len(compressed_bytes) > 0:
+                    df.at[idx, "feat_compression_ratio"] = len(original_bytes) / len(compressed_bytes)
+                
+                # 2. NCD (Normalized Compression Distance) to Spam Templates
+                # Logic: (C(x + y) - min(C(x), C(y))) / max(C(x), C(y))
+                # Low NCD = Similar to spam templates
+                len_c_x = len(compressed_bytes)
+                len_c_y = LEN_C_REF
+                
+                # C(x + y)
+                concat_bytes = original_bytes + b" " + REF_BYTES
+                len_c_xy = len(zlib.compress(concat_bytes))
+                
+                ncd = (len_c_xy - min(len_c_x, len_c_y)) / max(len_c_x, len_c_y)
+                df.at[idx, "feat_ncd_spam"] = max(0.0, min(1.0, ncd)) # Clip to [0, 1]
+                
+            except Exception as e:
+                # print(f"Error computing NCD for product {row.get('product_id')}: {e}")
+                pass
+
         # ====================== Final Fusion Features (Dual Interaction) ======================
         # Baseline Momentum (TF-IDF)
         quality_factor = df['category_fit_score'].fillna(0) + 0.5
