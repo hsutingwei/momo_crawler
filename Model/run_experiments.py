@@ -77,6 +77,12 @@ def run_experiment(exp_config, output_dir):
         }
 
     # 3. Prepare Features
+    # Drop features if specified in params (for rigorous A/B testing)
+    drop_feats = exp_config['params'].get('drop_features', [])
+    if drop_feats:
+        print(f"Dropping features: {drop_feats}")
+        X_dense_df = X_dense_df.drop(columns=[c for c in drop_feats if c in X_dense_df.columns], errors='ignore')
+
     X_dense = std_scaler_to_sparse(X_dense_df)
     X_all = hstack([X_dense, X_tfidf], format="csr")
     

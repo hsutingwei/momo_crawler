@@ -32,23 +32,24 @@
 
 ## 3. 實驗結果 (可靠性檢查)
 
-我們使用 MOMO 數據集進行了 5-Fold 交叉驗證 (XGBoost)，並使用了 GPU 加速。
+我們使用了正式的生產環境腳本 `run_experiments.py` 進行了嚴格的驗證（包含 GPU 加速、類別不平衡處理 `scale_pos_weight`、以及閥值搜尋）。
 
-| 指標 | 基準線 (原始特徵) | 實驗組 A (淨化交互)<br>*扣除負面情緒* | 實驗組 B (原始交互)<br>*保留負面情緒* |
-| :--- | :--- | :--- | :--- |
-| **精準度 (Precision)** | **0.2036** | 0.1302 (-36%) | 0.1623 (-20%) |
-| **召回率 (Recall)** | **0.0302** | 0.0215 (-28%) | 0.0301 (持平) |
-| **F1 分數** | **0.0521** | 0.0366 (-30%) | 0.0505 (-3%) |
+| 指標 | 嚴謹基準線 (Rigorous Baseline)<br>*無人工交互特徵* | 嚴謹實驗組 (Rigorous Interaction)<br>*Raw Arousal * log(Price)* |
+| :--- | :--- | :--- |
+| **精準度 (Precision)** | **0.1908** | 0.1844 (-3.4%) |
+| **召回率 (Recall)** | **0.5669** | 0.5362 (-5.4%) |
+| **F1 分數** | **0.2853** | 0.2741 (-3.9%) |
+| **PR AUC** | **0.2303** | 0.2248 (-2.4%) |
 
 **解讀**：
-*   **實驗組 A (淨化)** 表現最差，因為它強制移除了有價值的「負面情緒」訊號。
-*   **實驗組 B (原始)** 救回了召回率 (Recall)，但精準度仍然下降。
-*   **結論**：基準線 (Base) 表現最好。與其強制人工相乘 `Arousal * log(Price)`，不如讓 XGBoost 自己從 `Price` 和 `Arousal` 欄位中學習交互關係。
+*   即使在最嚴謹的實驗設定下，**加入人工交互特徵並沒有帶來提升**，反而導致各項指標輕微下降。
+*   這證實了 XGBoost 作為樹模型，已經能夠從原始的 `Price` 和 `BERT Scores` 欄位中學習到足夠優秀的非線性邊界。
+*   **結論**：不需要額外增加 `price_weighted_arousal` 或 `price_weighted_novelty`。模型自己學得更好。
 
 ---
 
 ## 4. 下一步 (Next Steps)
 
-1.  **還原 (Revert)**：從 `data_loader.py` 中移除人工的 `price_weighted_*` 特徵。
-2.  **採用 (Adopt)**：確保 `bert_novelty_mean` (新奇感) 與 `bert_negative_mean` (負面情緒) 永久加入特徵列表。
-3.  **進階 (Advanced)**：若仍想強制交互作用，請使用 **Tree Interaction Constraint**，而非人工特徵相乘。
+1.  **保持簡潔 (Keep Simple)**：在 `data_loader.py` 中移除人工的 `price_weighted_*` 特徵。
+2.  **保留原始特徵 (Retain Raw)**：確保 `bert_novelty_mean` (新奇感) 與 `bert_negative_mean` (負面情緒) 包含在輸入特徵中。
+3.  **信任模型 (Trust Model)**：讓 XGBoost 自動處理價格與情緒的關係。

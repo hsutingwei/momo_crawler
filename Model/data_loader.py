@@ -1123,26 +1123,32 @@ def load_product_level_training_set(
         # Rationale: Acceleration with very few comments is unstable.
         df["validated_velocity"] = df["ratio_recent30_to_prev60"] * np.log1p(df["comment_3rd_30d"])
         
-        # 2. Price Weighted Arousal: Arousal * log1p(Price)
-        # Rationale: FP has high arousal but low price. TP has higher price.
-        df["price_weighted_arousal"] = df["clean_arousal_score"] * np.log1p(df["price"])
+        # 2. Price Weighted Arousal (RAW): Arousal * log1p(Price)
+        # UPDATE 2025-12-08: Use RAW arousal. Previous 'clean_arousal' penalized Negative, which was found to be a POSITIVE signal.
+        df["price_weighted_arousal"] = df["bert_arousal_mean"] * np.log1p(df["price"])
         
-        # 3. Novelty Momentum: Acceleration * (1 - Repurchase Ratio)
+        # 3. Price Weighted Novelty (NEW 2025-12-08): Novelty * log1p(Price)
+        # Rationale: Novelty shows even stronger high-price signal than Arousal.
+        df["price_weighted_novelty"] = df["bert_novelty_mean"] * np.log1p(df["price"])
+        
+        # 4. Novelty Momentum: Acceleration * (1 - Repurchase Ratio)
         # Rationale: High acceleration driven by NEW people.
         df["novelty_momentum"] = df["ratio_recent30_to_prev60"] * (1 - df["repurchase_ratio_recent"])
         
-        # 4. Is Mature Product: Explicit Flag
+        # 5. Is Mature Product: Explicit Flag
         # Rationale: Help tree split "Old Hits" from "New Hits".
         df["is_mature_product"] = ((df["comment_count_pre"] > 50) | (df["repurchase_ratio_recent"] > 0.2)).astype(int)
 
         # Handle days_since_last_comment for items with no comments
         df.loc[df["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
         
-        for c in dense_cols:
+        dense_cols_extended = dense_cols + ["price_weighted_novelty"]
+        
+        for c in dense_cols_extended:
             if c not in df.columns:
                 df[c] = 0
 
-        X_dense = df[dense_cols].fillna(0).astype(float)
+        X_dense = df[dense_cols_extended].fillna(0).astype(float)
         
         # ====================== Multiclass Label Logic ======================
         if label_strategy == "multiclass":
