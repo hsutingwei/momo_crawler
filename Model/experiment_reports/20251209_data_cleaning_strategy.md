@@ -86,44 +86,52 @@ WHERE p.product_id NOT IN (
 
 ---
 
-## 5. 附錄：v2_error_prod 的具體過濾條件 (Detailed Filtering Logic)
+## 5. 附錄：各版本篩選條件詳解 (Detailed Filtering Logic)
 
-v2_error_prod 是基於產品層級的「模型一致錯誤 (Consensus Error)」進行過濾。具體流程如下：
+本節詳細說明三個版本的具體篩選邏輯與數學定義。
 
-### 5.1 定義標籤任務
-*   固定標籤 $y$：使用 `binary_explosive` 任務定義（在 cutoff 之後，銷量是否有爆發：`ratio >= 1.0` 且 `delta >= 10`）。
-
-### 5.2 訓練 4 組不同視角的模型
-我們對每個商品訓練 4 組使用不同特徵子集 (Feature Subsets) 的 XGBoost 模型：
-1.  **Base**：基本結構型特徵（價格、評分、歷史評論量、TF-IDF 等）。
-2.  **Price**：`Base` + 價格交互特徵 (Price-Moderated Features)。
-3.  **Kin**：`Base` + 動能特徵 (Review Kinematics: velocity, acceleration 等)。
-4.  **Nov**：`Base` + 新奇度特徵 (Novelty, BERT, Category Fit 等)。
-
-### 5.3 計算一致錯誤 (Ensemble Error)
-對每一組模型，使用交叉驗證 (Cross-Validation) 得到每個商品的預測標籤 $y_{pred}^{model}$。
-對每一個商品 $P$，計算它被幾個模型判錯：
-
-$$ \text{is\_wrong}_{model} = \begin{cases} 1 & \text{if } y_{pred}^{model} \neq y_{true} \\ 0 & \text{otherwise} \end{cases} $$
-
-$$ \text{fail\_count} = \text{is\_wrong}_{Base} + \text{is\_wrong}_{Price} + \text{is\_wrong}_{Kin} + \text{is\_wrong}_{Nov} $$
-
-### 5.4 篩選條件 (Deletion Criteria)
-若某個商品在 4 個模型中有 **至少 3 個** 判錯：
-
-$$ \text{fail\_count} \ge 3 $$
-
-則該商品會被視為「在多種特徵視角下都難以學習／高度不穩定」的樣本，並寫入 `ml_data_filters`：
-*   `version_tag` = 'v2_error_prod'
-*   `filter_level` = 'product_id'
-*   `reason` = 'ensemble_error_count'
-*   `score` = fail_count
-
-**一句話總結**：
-`v2_error_prod` = 在 4 種不同特徵視角的模型中，被至少 3 個模型判錯的商品，直接標記為「問題樣本」並排除。
+### 5.1 v1_corr_kw：關鍵字相關性過濾 (Keyword Correlation)
+*   **目標**：移除那些「評論量」與「銷量爆發」完全無關的產品類別 (Keywords)。
+*   **變數定義**：
+    *   $X_{vol}$：該產品的 90天評論數 (`comment_count_90d`)。
+    *   $y$：該產品的爆發標籤 (`binary_explosive`)。
+*   **計算方式**：
+    對每個 Keyword $k$，計算其下所有商品 $i \in k$ 的 Pearson 相關係數：
+    $$ Corr_k = \text{Corr}(X_{vol}, y) $$
+*   **篩選條件**：
+    $$ Corr_k < 0.05 $$
+*   **意義**：
+    若相關係數極低，代表在該品類中，「討論熱度」與「銷量」幾乎沒有正相關 (可能是冷門品類或隨機市場)，不適合用來訓練以評論為基礎的模型。
 
 ---
-### 5.5 為什麼不直接用簡單規則 (如長度)？
+
+### 5.2 v2_error_prod：模型一致錯誤過濾 (Ensemble Consensus Error)
+*   **目標**：移除在多重特徵視角下都無法被正確預測的個別商品 (Product-Level Noise)。
+*   **模型架構**：
+    訓練 4 組不同特徵子集的 XGBoost 模型 (Base, Price, Kin, Nov)。
+*   **計算方式**：
+    對每個商品 $P$，計算它被幾個模型判錯 ($y_{pred} \neq y_{true}$)：
+    $$ \text{fail\_count} = \sum_{m \in \{Base, Price, Kin, Nov\}} \mathbb{I}(y_{pred}^m \neq y_{true}) $$
+*   **篩選條件**：
+    $$ \text{fail\_count} \ge 3 $$
+*   **意義**：
+    當一個商品被 3 個以上的模型誤判，代表無論是從價格、動能還是新奇度的角度，都無法解釋其行為。這通常意味著**標註錯誤**或**隨機噪聲**。
+
+---
+
+### 5.3 v3_error_kw：關鍵字錯誤率過濾 (Keyword Error Rate)
+*   **目標**：移除那些「整體預測難度過高」的產品類別。
+*   **計算方式**：
+    使用 `Base` 模型的預測結果。對每個 Keyword $k$，計算其平均錯誤率：
+    $$ \text{ErrorRate}_k = \frac{1}{|P_k|} \sum_{i \in P_k} \mathbb{I}(y_{pred}^{Base, i} \neq y_{true}^i) $$
+*   **篩選條件**：
+    $$ \text{ErrorRate}_k > 0.5 \quad \text{AND} \quad \text{Count}_k \ge 5 $$
+*   **意義**：
+    若某個類別的預測錯誤率超過 50% (比亂猜還差)，代表該品類的行為模式可能與其他品類有本質上的不同，或者我們的特徵完全無法捕捉該品類的規律。
+
+---
+
+### 5.4 為什麼不直接用簡單規則 (如長度)？
 
 其實我們**已經有**使用簡單規則在前處理階段了。`v2_error_prod` 負責的是「規則篩不掉的」高級噪聲。
 
