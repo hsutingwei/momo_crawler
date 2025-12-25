@@ -135,17 +135,51 @@ WHERE p.product_id NOT IN (
 
 其實我們**已經有**使用簡單規則在前處理階段了。`v2_error_prod` 負責的是「規則篩不掉的」高級噪聲。
 
-## 6. 附錄：系統中現存的具體篩選規則 (Existing Hard Rules)
+## 6. 附錄：v2_error_prod 實際影響範圍 (Impact Analysis)
 
-除了 `v2_error_prod` (模型篩選) 之外，我們的 Pipeline 在前處理階段已經包含以下**具體規則**：
+以下 SQL 用於統計每個關鍵字 (Category) 中有多少商品被標記為噪聲。
+這能幫助我們了解哪些品類最「難以預測」或「充斥矛盾數據」。
 
-| 元件 (Component) | 具體條件 (Condition) | 目的 (Purpose) | 程式碼位置 |
-| :--- | :--- | :--- | :--- |
-| **BERT 情緒特徵** | `length(text) <= 5` | **忽略過短評論**<br>字數少於 5 字 (如"好"、"讚") 不進 BERT 計算，避免產生無意義的情緒分數。 | `compute_bert_features.py` |
-| **NCD 壓縮特徵** | `length(text) < 10` | **忽略短文本壓縮**<br>字數少於 10 字無法有效計算壓縮率，直接跳過 (設為預設值)。 | `data_loader.py` |
-| **TF-IDF 關鍵字** | `len(token) < 2` OR `len(token) > 4` | **詞彙長度限制**<br>只保留 2~4 個字的詞彙，過濾單字 (停用詞) 或過長句子。 | `data_loader.py` |
-| **Category Fit** | `group_size < 2` | **群體過小**<br>若該關鍵字下的商品數少於 2 個，無法計算「群體共識」，Fit Score 設為 0。 | `data_loader.py` |
+### 6.1 統計查詢 SQL
 
-**結論**：
-*   **簡單的噪聲 (如字數太短)**已經被上述規則擋下了。
-*   **`v2_error_prod` 刪除的** 是那些「字數正常、格式正常」，但**內容邏輯矛盾** (例如：給了 5 星好評卻寫負評，導致 Price/Nov 模型都預測失敗) 的進階噪聲。
+```sql
+WITH product_stats AS (
+    SELECT 
+        p.keyword,
+        COUNT(p.id) AS total_products,
+        COUNT(f.filter_value) AS filtered_count
+    FROM products p
+    LEFT JOIN ml_data_filters f ON 
+        CAST(p.id AS VARCHAR) = f.filter_value 
+        AND f.version_tag = 'v2_error_prod'
+        AND f.filter_level = 'product_id'
+        AND f.reason = 'ensemble_error_count'
+    GROUP BY p.keyword
+)
+SELECT 
+    keyword,
+    total_products AS original_count,
+    filtered_count AS removed_count,
+    ROUND((filtered_count::NUMERIC / NULLIF(total_products, 0)) * 100, 2) AS removed_percentage,
+    (total_products - filtered_count) AS remaining_count
+FROM product_stats
+WHERE filtered_count > 0
+ORDER BY removed_percentage DESC, total_products DESC;
+```
+
+### 6.2 實際執行結果 (Top Impact Categories)
+
+根據 2025-12-09 的執行結果，各品類的噪聲/困難樣本比例：
+
+| Keyword | Original Count | Removed Count | Removed % | Remaining |
+| :--- | :--- | :--- | :--- | :--- |
+| **維他命 (Vitamins)** | 1273 | **290** | **22.78%** | 983 |
+| **口罩 (Masks)** | 1566 | **323** | **20.63%** | 1243 |
+| **益生菌 (Probiotics)** | 1412 | 239 | 16.93% | 1173 |
+| **葉黃素 (Lutein)** | 1130 | 167 | 14.78% | 963 |
+| **膠原蛋白 (Collagen)** | 1189 | 147 | 12.36% | 1042 |
+| **雞精 (Chicken Essence)** | 627 | 44 | 7.02% | 583 |
+
+**洞察 (Insights)**：
+*   **高噪聲區 (維他命、口罩)**：這類商品規格高度標準化，差異極小，評論內容往往非常空泛 (如: "好用", "出貨快") 或受價格促銷嚴重影響。模型發現很難單純透過文本特徵來區分它們的銷量爆發，因此產生了大量「怎麼算都不對」的判定。
+*   **低噪聲區 (雞精)**：這類商品通常有明確的品牌偏好和具體的使用情境 (送禮/自用)，評論內容較具體，模型較容易抓到規律。
