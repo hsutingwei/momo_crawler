@@ -96,6 +96,8 @@ def parse_args():
                     help="交叉驗證折數（StratifiedKFold）")
     ap.add_argument("--exclude-products", type=str, default="8918452",
                     help="排除的商品 ID 列表（逗號分隔）")
+    ap.add_argument("--filter-version", type=str, default=None,
+                    help="自動排除的過濾版本（如 'v2_error_prod'），將從 DB 讀取清單並與 manually excluded 合併")
     ap.add_argument("--keyword", type=str, default=None,
                     help="單一關鍵詞篩選：只使用指定關鍵詞的資料")
     ap.add_argument("--outdir", type=str, default="Model/outputs",
@@ -141,6 +143,37 @@ def parse_args():
     ap.add_argument("--min-eval-neg-samples", type=int, default=10,
                     help="QA 檢查：eval set 中負類樣本的最低要求（預設 10）")
     return ap.parse_args()
+
+def fetch_db_exclusions(version_tag: str) -> List[str]:
+    """
+    從資料庫讀取指定版本的過濾名單
+    """
+    if not version_tag:
+        return []
+    
+    from config.database import DatabaseConfig
+    import psycopg2
+    
+    print(f"Connecting to DB to fetch exclusions for version: '{version_tag}'...")
+    try:
+        db = DatabaseConfig()
+        conn = db.get_connection()
+        with conn.cursor() as cur:
+            sql = """
+            SELECT filter_value 
+            FROM ml_data_filters 
+            WHERE version_tag = %s AND filter_level = 'product_id'
+            """
+            cur.execute(sql, (version_tag,))
+            rows = cur.fetchall()
+        conn.close()
+        
+        excluded_ids = [r[0] for r in rows]
+        print(f" -> DB Exclusions: Found {len(excluded_ids)} items.")
+        return excluded_ids
+    except Exception as e:
+        print(f"Error fetching exclusions from DB: {e}")
+        return []
 
 def std_scaler_to_sparse(Xdf: pd.DataFrame) -> csr_matrix:
     """
@@ -590,6 +623,8 @@ def save_dataset_artifacts(outdir: str,
     把目前載入好的資料集落地成暫存檔，回傳各檔案路徑（之後可寫進 DB）。
     """
     os.makedirs(outdir, exist_ok=True)
+    ds_dir = os.path.join(outdir, "datasets")
+    os.makedirs(ds_dir, exist_ok=True)
     ds_dir = os.path.join(outdir, "datasets")
     os.makedirs(ds_dir, exist_ok=True)
 
@@ -1048,7 +1083,19 @@ def main():
     topn_list = [int(x) for x in args.top_n.split(",")]
     alg_list  = [s.strip().lower() for s in args.algorithms.split(",")]
     fs_list   = [s.strip() for s in args.fs_methods.split(",")]
-    excluded  = [int(x) for x in args.exclude_products.split(",")] if args.exclude_products else []
+    # 解析並合併排除清單
+    manual_exclude = parse_str_list(args.exclude_products) or []
+    
+    # 新增：從 DB 讀取自動過濾清單
+    db_exclude = fetch_db_exclusions(args.filter_version)
+    
+    # 合併兩者 (轉成整數並去重)
+    excluded = list(set([int(pid) for pid in manual_exclude if str(pid).isdigit()] + 
+                            [int(pid) for pid in db_exclude if str(pid).isdigit()]))
+    
+    if args.filter_version:
+        print(f"Filter Version '{args.filter_version}': Added {len(db_exclude)} products from DB.")
+        print(f"Total Excluded Products: {len(excluded)}")
 
     # 取得資料（依 mode）
     if args.mode == "product_level":
