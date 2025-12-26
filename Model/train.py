@@ -113,9 +113,12 @@ def parse_args():
                     help="標籤定義：sales snapshot 之間的最大間隔天數（天）")
     ap.add_argument("--label-mode", type=str, default="next_batch",
                     choices=["next_batch", "fixed_window"],
-                    help="?????next_batch / fixed_window")
+                    help="標籤生成模式：next_batch / fixed_window")
+    ap.add_argument("--label-strategy", type=str, default="absolute",
+                    choices=["absolute", "hybrid", "multiclass", "default"],
+                    help="標籤定義策略：absolute (僅 delta) / hybrid (delta + ratio) / multiclass")
     ap.add_argument("--label-window-days", type=float, default=7.0,
-                    help="fixed_window ?????? (?)")
+                    help="fixed_window 或 next_batch 的觀察窗口（天）")
     ap.add_argument("--align-max-gap-days", type=float, default=None,
                     help="對齊 snapshot 時可允許的最大差距（天）")
     ap.add_argument("--min-comments", type=int, default=0,
@@ -704,6 +707,18 @@ def run_one_setting(run_id: str, args, top_n: int, alg_name: str, fs_method: str
     feature_names = dense_cols + [f"tfidf::{tok}" for tok in vocab]
     X_all = hstack([X_dense, X_tfidf], format="csr")
 
+    # [FIX] 自動計算 scale_pos_weight (如果尚未存在)
+    # 這是為了修復 Baseline 在不平衡資料上表現極差的問題
+    if not hasattr(args, "suggested_spw") or args.suggested_spw is None:
+        n_pos = int((y == 1).sum())
+        n_neg = int((y == 0).sum())
+        if n_pos > 0:
+            args.suggested_spw = float(n_neg) / float(n_pos)
+            print(f"[Auto-Balancing] Detected imbalance: Neg={n_neg}, Pos={n_pos}. Setting scale_pos_weight={args.suggested_spw:.4f}")
+        else:
+            args.suggested_spw = 1.0
+            print("[Auto-Balancing] No positive samples found! Setting scale_pos_weight=1.0")
+
     # 構建模型：根據算法名稱創建對應的模型實例
     model, needs_dense = build_model(alg_name, args)
     if model is None:
@@ -1099,6 +1114,10 @@ def main():
 
     # 取得資料（依 mode）
     if args.mode == "product_level":
+        print(f"[DEBUG] label_delta_threshold: {args.label_delta_threshold}")
+        print(f"[DEBUG] label_strategy: {args.label_strategy}")
+        print(f"[DEBUG] label_ratio_threshold: {args.label_ratio_threshold}")
+        
         X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
             date_cutoff=args.date_cutoff,
             top_n=topn_list[0],                 # vocab 以第一個 top_n 建立（若要每個 topN都建 vocab，可外層迭代再呼叫一次 loader）
@@ -1114,7 +1133,12 @@ def main():
             align_max_gap_days=args.align_max_gap_days,
             min_comments=args.min_comments,
             keyword_whitelist=args.keyword_whitelist,
-            keyword_blacklist=args.keyword_blacklist
+            keyword_blacklist=args.keyword_blacklist,
+            label_strategy=args.label_strategy,
+            label_params={
+                "ratio_threshold": args.label_ratio_threshold,
+                "delta_threshold": args.label_delta_threshold
+            }
         )
     else:
         # 保留原 comment-level（以便回溯）——只用單一 topN

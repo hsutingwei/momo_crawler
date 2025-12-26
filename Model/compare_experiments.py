@@ -10,8 +10,8 @@ def load_summary(path):
 
 def main():
     base_path = "Model/outputs"
-    exp1 = "exp_baseline_no_f"
-    exp2 = "exp_v2_filter"
+    exp1 = "exp_baseline_hybrid_fix"
+    exp2 = "exp_v2_filter_hybrid"
     
     df1 = load_summary(os.path.join(base_path, exp1))
     df2 = load_summary(os.path.join(base_path, exp2))
