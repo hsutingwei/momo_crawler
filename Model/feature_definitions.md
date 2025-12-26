@@ -90,3 +90,145 @@
 *   結合 `kin_acc_abs` (加速度) 使用，過濾掉「評論暴增但內容與品類無關」的異常商品 (可能是炎上或操作)。
 *   例如：`quality_driven_momentum = kin_acc_abs * category_fit_score`。
 
+---
+
+## 5. 心理層特徵 (Psychology Layer / Info-Theoretic Features)
+
+**研究主題**: 使用資訊理論與心理學概念，衡量評論的「真實性」與「有機性」，用於區分「真實的有機討論」與「刷評/機器人行為」。
+
+### 5.1 語意熵 (Semantic Entropy)
+**目標**: 測量評論的**主題多樣性**，使用 Shannon 熵來量化評論內容的語意聚類分布。
+
+#### 計算邏輯
+1.  **資料來源**: 使用該商品最近 **90 天內的最多 100 條評論**（從 `recent_comments_json` 欄位）。
+2.  **文字向量化** (A/B 測試)：
+    *   **`feat_entropy_tfidf`** (Baseline): 使用 TF-IDF 向量化 (100 維)
+    *   **`feat_entropy_emb`** (Challenger): 使用 SBERT 語意嵌入 (`all-MiniLM-L6-v2`)
+3.  **K-Means 聚類**:
+    ```python
+    n_clusters = min(len(texts), 5)  # 最多 5 個主題群
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    labels = kmeans.fit_predict(embeddings)
+    ```
+4.  **計算 Shannon 熵**:
+    ```python
+    counts = np.bincount(labels)
+    probs = counts / len(labels)
+    entropy = scipy.stats.entropy(probs, base=2)
+    ```
+
+#### 語意解釋
+
+| 熵值範圍 | 意義 | 實際案例 |
+|---------|------|---------|
+| **高熵 (1.5+)** | 評論主題**多元分散** | 真實用戶從多種角度討論（品質、外觀、價格、配送等） |
+| **低熵 (< 0.5)** | 評論主題**高度一致** | 可疑的「範本化刷評」或「一致性回覆」 |
+
+#### 應用
+*   **Spam Risk Score**: `risk_mask = (comment_count_90d > 5) & (entropy < 0.5)`
+*   **Challenger Momentum**: `momentum_emb = kin_acc_abs × category_fit_score × (entropy + 0.5)`
+
+---
+
+### 5.2 時間突發性 (Temporal Burstiness)
+**目標**: 測量評論的**時間分布模式**，區分「自然的討論節奏」與「集中刷評」。
+
+#### 計算邏輯
+1.  **資料來源**: 使用該商品最近 **90 天內的評論**及其 `comment_date`（至少需要 3 條評論）。
+2.  **計算評論間隔時間 (IAT)**:
+    ```python
+    dates_sorted = sorted(dates)
+    iats = [(dates_sorted[i+1] - dates_sorted[i]).total_seconds() 
+            for i in range(len(dates_sorted)-1)]
+    ```
+3.  **計算 Burstiness 指標**:
+    ```python
+    mean_iat = np.mean(iats)
+    std_iat = np.std(iats)
+    r = std_iat / mean_iat  # 變異係數
+    burstiness = (r - 1) / (r + 1)  # 標準化到 [-1, 1]
+    ```
+
+#### 語意解釋
+
+| 值範圍 | 意義 | 實際案例 |
+|-------|------|---------|
+| **接近 1** | **突發性高** (Bursty) | 評論集中在短時間內爆發，然後長時間沉寂（**典型爆品模式**） |
+| **接近 0** | **穩定均勻** (Regular) | 評論均勻分布（穩定銷售的成熟商品） |
+| **接近 -1** | **異常規律** (Periodic) | 評論以極其規律的間隔出現（**可疑的機器人刷評**） |
+
+#### 洞察
+*   **爆品檢測**: 高 burstiness (> 0.5) + 高加速度 → 真實的爆發式討論
+*   **刷評檢測**: 低 burstiness (< -0.5) + 高評論量 → 可疑的規律性刷評
+
+---
+
+### 5.3 詞彙多樣性 (Lexical Diversity)
+**目標**: 測量評論的**用詞豐富程度**，使用 **Guiraud's R 指標**量化詞彙重複率。
+
+#### 計算邏輯
+1.  **資料來源**: 合併該商品最近 **90 天內的所有評論文字**。
+2.  **分詞統計**:
+    ```python
+    tokens = all_text.split()
+    N = len(tokens)  # 總詞數
+    V = len(set(tokens))  # 不同詞彙數
+    V1 = sum(1 for count in Counter(tokens).values() if count == 1)  # 單次詞數
+    ```
+3.  **Guiraud's R 指標**:
+    ```python
+    denominator = 1 - (V1 / V)
+    R = (100 * log(N)) / denominator
+    ```
+
+#### 語意解釋
+
+| R 值 | 意義 | 實際案例 |
+|-----|------|---------|
+| **高 R (> 100)** | **詞彙多樣** | 真實用戶用不同方式描述（「超讚」「好用」「推薦」「划算」） |
+| **低 R (< 50)** | **詞彙貧乏** | 重複使用相同詞彙（「好好好好好」「必買必買必買」） |
+
+#### 應用
+*   **真實性驗證**: 高詞彙多樣性通常代表真實的多元討論
+*   **範本化檢測**: 極低的詞彙多樣性可能代表「複製貼上」或「範本回覆」
+
+---
+
+### 5.4 特徵組合應用
+
+#### Challenger Momentum (挑戰者動量)
+```python
+organic_factor_emb = df['feat_entropy_emb'].fillna(0) + 0.5
+df['momentum_emb'] = df['kin_acc_abs'] * quality_factor * organic_factor_emb
+```
+**邏輯**: 加速度 × 品類適配度 × 語意多樣性 → 過濾掉「虛假的熱度增長」
+
+#### Spam Risk Score (垃圾風險分數)
+```python
+risk_entropy = df['feat_entropy_emb']
+risk_mask = (df['comment_count_90d'] > 5) & (risk_entropy < 0.5)
+df['spam_risk_score'] = df.loc[risk_mask, 'kin_acc_abs']
+```
+**邏輯**: 高評論量 + 低語意熵 + 高加速度 → 可疑的刷榜行為
+
+---
+
+### 5.5 研究價值與洞察
+
+#### 為什麼需要心理層特徵？
+
+| 特徵類型 | 優勢 | 盲點 |
+|---------|------|------|
+| **物理特徵** (`kin_acc_abs`) | 快速捕捉「量」的變化 | 無法區分真假，刷評也會產生高加速度 |
+| **心理特徵** (Entropy/Burstiness/Diversity) | 捕捉「質」的特徵，能識別真實性 | 計算成本較高 |
+
+#### 特徵組合的威力
+
+| 情境 | 物理特徵 | 心理特徵 | 判斷結果 |
+|-----|---------|---------|---------|
+| **真實爆品** | 高加速度 | 高熵 + 高突發 + 高多樣性 | ✅ 正類 |
+| **刷榜商品** | 高加速度 | 低熵 + 低突發 + 低多樣性 | ❌ 負類 (spam_risk_score 標記) |
+| **穩定老品** | 低加速度 | 中等熵 + 低突發 + 中多樣性 | ❌ 負類 |
+
+**核心洞察**: 心理層特徵形成了一個「**真實性驗證系統**」，與物理特徵結合後能有效過濾掉「虛假的熱度增長」，只保留「真實的爆品訊號」。
+
