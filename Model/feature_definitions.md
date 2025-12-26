@@ -31,17 +31,17 @@
 
 ---
 
-## 2. 複合動量特徵 (derived Momentum)
+### 1.4 複合動量特徵 (derived Momentum)
 結合物理特徵與其他維度（總量、語意品質），以過濾掉「虛假」的加速度。
 
-### 2.1 早鳥動量 (Early Bird Momentum)
+#### 1.4.1 早鳥動量 (Early Bird Momentum)
 *   **公式**: `kin_acc_abs * (1 / (log1p(comment_count_90d) + 1))`
 *   **意義**: **獎勵「新」的加速度**。
     *   同樣增加 10 則評論，對於一個累積只有 5 則的新品 (分母小) 來說，此分數極高。
     *   對於已經有 1000 則評論的老品 (分母大)，此分數會被稀釋。
     *   用途：專門抓那種「橫空出世」的新爆品。
 
-### 2.2 品質驅動動量 (Quality Driven Momentum)
+#### 1.4.2 品質驅動動量 (Quality Driven Momentum)
 *   **公式**: `kin_acc_abs * category_fit_score`
 *   **意義**: **需經過「語意合群度」驗證的加速度**。
     *   `category_fit_score` (類別適配度) 衡量該商品的評論內容是否與該品類的「典型討論」相符。
@@ -50,16 +50,16 @@
 
 ---
 
-## 3. 其他基礎特徵
+### 1.5 其他基礎特徵
 *   **`comment_count_pre`**: 訓練截止日前累積總評論數。
 *   **`days_since_last_comment`**: 距離最後一則評論的天數 (Recency)。
 *   **`sentiment_mean_recent`**: 近期評論的平均情感分數。
 
 ---
 
-## 4. 演算法層特徵 (Algorithm Layer)
+## 2 演算法層特徵 (Algorithm Layer)
 
-### 4.1 類別適配度 (Category Fit Score)
+### 2.1 類別適配度 (Category Fit Score)
 **研究主題**: 以「品類共識」為基準，衡量該商品的評論內容是否為「典型代表」。
 
 #### 目標
@@ -92,11 +92,11 @@
 
 ---
 
-## 5. 心理層特徵 (Psychology Layer / Info-Theoretic Features)
+## 3. 心理層特徵 (Psychology Layer / Info-Theoretic Features)
 
 **研究主題**: 使用資訊理論與心理學概念，衡量評論的「真實性」與「有機性」，用於區分「真實的有機討論」與「刷評/機器人行為」。
 
-### 5.1 語意熵 (Semantic Entropy)
+### 3.1 語意熵 (Semantic Entropy)
 **目標**: 測量評論的**主題多樣性**，使用 Shannon 熵來量化評論內容的語意聚類分布。
 
 #### 計算邏輯
@@ -130,7 +130,7 @@
 
 ---
 
-### 5.2 時間突發性 (Temporal Burstiness)
+### 3.2 時間突發性 (Temporal Burstiness)
 **目標**: 測量評論的**時間分布模式**，區分「自然的討論節奏」與「集中刷評」。
 
 #### 計算邏輯
@@ -163,7 +163,7 @@
 
 ---
 
-### 5.3 詞彙多樣性 (Lexical Diversity)
+### 3.3 詞彙多樣性 (Lexical Diversity)
 **目標**: 測量評論的**用詞豐富程度**，使用 **Guiraud's R 指標**量化詞彙重複率。
 
 #### 計算邏輯
@@ -194,7 +194,7 @@
 
 ---
 
-### 5.4 特徵組合應用
+### 3.4 特徵組合應用
 
 #### Challenger Momentum (挑戰者動量)
 ```python
@@ -213,7 +213,7 @@ df['spam_risk_score'] = df.loc[risk_mask, 'kin_acc_abs']
 
 ---
 
-### 5.5 研究價值與洞察
+### 3.5 研究價值與洞察
 
 #### 為什麼需要心理層特徵？
 
