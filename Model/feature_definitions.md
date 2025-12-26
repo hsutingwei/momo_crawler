@@ -646,4 +646,330 @@ pattern = boolean flag (0/1)
 - 樹模型：更容易找到最佳分裂點
 
 **結論**: 交互特徵 = **特徵工程的「語法糖」**，讓模型更容易學習你的領域知識。
+
+---
+
+## 6. BERT 語意層 (Deep Semantic) - 情緒與意圖
+
+**研究主題**: 使用 **BERT Zero-Shot 分類**來偵測評論中的「**情緒狀態**」與「**用戶意圖**」，取代傳統的關鍵詞匹配或情感詞典方法。
+
+### 設計理念
+
+> **核心概念**: 傳統的 Regex 或詞典方法只能捕捉「表面詞彙」，無法理解「語境」和「隱含意圖」。BERT Zero-Shot 可以理解「我超愛這個」和「愛死了會回購」都表達「arousal + repurchase」，即使用詞完全不同。
+
+---
+
+### 6.1 BERT Zero-Shot 分類架構
+
+#### 資料來源
+- **表格**: `comment_semantic_scores`
+- **欄位**: `score_arousal`, `score_novelty`, `score_repurchase`, `score_negative`, `score_advertisement`
+- **時間窗口**: 最近 **90 天**的評論
+- **聚合方式**: 對每個商品計算**平均機率分數**
+
+#### 標籤定義 (Label Definitions)
+**來源檔案**: [`compute_bert_features.py`](file:///c:/yves/momo/momo_crawler/Model/compute_bert_features.py#L106-L112)
+
+BERT Zero-Shot 分類使用以下**中文標籤字串**來定義每個語意維度：
+
+```python
+label_map = {
+    "High_Arousal": "驚豔、激動、太神了",
+    "High_Novelty": "新奇、初次體驗、相見恨晚",
+    "High_Repurchase_Intent": "回購意願高、忠實粉絲",
+    "Negative_Complaint": "憤怒、失望、反推",
+    "Advertisement": "業配、廣告、湊字數"
+}
+```
+
+**運作原理**:
+1. **模型**: 使用 `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`（多語言 Zero-Shot 模型）
+2. **輸入**: 評論文字（如「這個超好用會再買」）
+3. **候選標籤**: 上述 5 個中文標籤字串
+4. **輸出**: 每個標籤的機率分數（0-1）
+5. **儲存**: 機率分數寫入 `comment_semantic_scores` 表
+
+**範例推理過程**:
+```python
+評論: "這個超好用會再買"
+
+BERT 分類器判斷：
+  - "驚豔、激動、太神了" (High_Arousal) → 0.75 (高興奮)
+  - "新奇、初次體驗、相見恨晚" (High_Novelty) → 0.30 (中等新奇)
+  - "回購意願高、忠實粉絲" (High_Repurchase_Intent) → 0.90 (強回購意圖！)
+  - "憤怒、失望、反推" (Negative_Complaint) → 0.05 (低負面)
+  - "業配、廣告、湊字數" (Advertisement) → 0.10 (低廣告嫌疑)
+```
+
+**為什麼使用中文標籤？**
+- mDeBERTa-v3-base-mnli-xnli 是多語言模型，支援中英文
+- 中文標籤能更精確匹配中文評論的語意
+- 標籤字串的選擇影響分類準確度（「驚豔」vs「高興」效果不同）
+
+
+#### SQL 查詢邏輯
+```sql
+-- Semantic Mean Scores (Recent 90 Days)
+AVG(score_arousal) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS bert_arousal_mean,
+AVG(score_novelty) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS bert_novelty_mean,
+AVG(score_repurchase) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS bert_repurchase_mean,
+AVG(score_negative) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS bert_negative_mean,
+AVG(score_advertisement) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS bert_advertisement_mean
+```
+
+**設計選擇**: 使用**平均機率**而非二元標籤（>0.8），因為：
+- 機率值包含更豐富的信息（0.9 vs 0.5 都是正類，但信心不同）
+- 避免硬閾值導致的邊界問題
+- 可以捕捉「整體氛圍」而非「極端案例」
+
+---
+
+### 6.2 五個核心語意維度
+
+#### 6.2.1 興奮度 (Arousal) - `bert_arousal_mean`
+**偵測目標**: 評論者的**情緒激動程度**（正向或負向皆可）。
+
+**典型表達**:
+- ✅ 正向興奮: "太好用了！"、"超讚"、"驚艷"、"愛死了"
+- ✅ 負向興奮: "太爛了！"、"超失望"、"氣死"、"不能接受"
+- ❌ 低興奮: "還可以"、"普通"、"沒什麼特別"
+
+**意義**:
+- 高 arousal (> 0.6) = 商品引發**強烈情緒反應**（好或壞）
+- 低 arousal (< 0.3) = 商品**平淡無奇**，缺乏討論價值
+
+**爆品關聯**:
+- 爆品通常引發強烈情緒（高 arousal）
+- 但需結合 `bert_negative_mean` 判斷是正向爆紅還是負面炎上
+
+---
+
+#### 6.2.2 新奇度 (Novelty) - `bert_novelty_mean`
+**偵測目標**: 商品是否具有**創新性、獨特性、話題性**。
+
+**典型表達**:
+- ✅ 高新奇: "第一次看到"、"好特別"、"超酷的設計"、"創新"、"驚喜"
+- ❌ 低新奇: "跟別家一樣"、"常見款"、"沒什麼特別"
+
+**意義**:
+- 高 novelty (> 0.6) = 商品有**差異化**，容易引發討論和分享
+- 低 novelty (< 0.3) = 同質化商品，難以脫穎而出
+
+**爆品關聯**:
+- **與高價商品高度相關**（研究發現：novelty × price 是最強訊號之一）
+- 新奇度是「破圈傳播」的關鍵（引發好奇 → 分享 → 擴散）
+
+---
+
+#### 6.2.3 回購意圖 (Repurchase) - `bert_repurchase_mean`
+**偵測目標**: 用戶是否表達**再次購買或推薦他人**的意願。
+
+**典型表達**:
+- ✅ 高回購: "會再買"、"推薦給朋友"、"回購第三次"、"囤貨"、"必買清單"
+- ❌ 低回購: "買一次就夠了"、"不會再買"、"踩雷"
+
+**意義**:
+- 高 repurchase (> 0.6) = 用戶忠誠度高，**長期價值**
+- 低 repurchase (< 0.3) = 一次性購買，或使用體驗不佳
+
+**爆品關聯的兩面性**:
+- **新客爆品**: 低 repurchase（大量新用戶湧入，還沒回購機會）
+- **回購爆品**: 高 repurchase（老客戶持續回購）
+- 需結合 `novelty_momentum` 判斷是哪一種
+
+---
+
+#### 6.2.4 負面情緒 (Negative) - `bert_negative_mean`
+**偵測目標**: 評論中的**不滿、憤怒、失望**等負面情緒。
+
+**典型表達**:
+- ✅ 高負面: "很失望"、"品質差"、"客服態度惡劣"、"退貨"、"不推薦"
+- ❌ 低負面: "滿意"、"符合預期"、"很好"
+
+**意義**:
+- 高 negative (> 0.6) = 商品存在問題，可能是**炎上事件**
+- 低 negative (< 0.2) = 用戶滿意度高
+
+**重要發現 (2025-12-08)**:
+> **負面情緒本身也是強訊號**！炎上也是一種「爆紅」（高討論度）。
+> 因此在 `price_weighted_arousal` 中改用 **RAW arousal**，不再扣除 negative。
+
+---
+
+#### 6.2.5 廣告嫌疑 (Advertisement) - `bert_advertisement_mean`
+**偵測目標**: 評論是否像**商業廣告或業配文**。
+
+**典型表達**:
+- ✅ 高廣告: "官方推薦"、"限時優惠"、"點擊連結"、"私訊我"、"團購開跑"
+- ❌ 低廣告: "我自己買的"、"真心推薦"、"使用心得"
+
+**意義**:
+- 高 advertisement (> 0.6) = 可能是**假評論或業配**
+- 低 advertisement (< 0.2) = 真實用戶分享
+
+**應用**:
+- 用於計算 `clean_arousal_score`（扣除廣告成分）
+- 但後來發現過度懲罰，因此調整策略
+
+---
+
+### 6.3 衍生特徵
+
+#### 6.3.1 乾淨興奮度 (Clean Arousal Score)
+**目標**: 過濾掉「負面炎上」和「假評論廣告」的興奮度。
+
+```python
+df["clean_arousal_score"] = df["bert_arousal_mean"] * (1 - df["bert_negative_mean"]) * (1 - df["bert_advertisement_mean"])
+```
+
+**邏輯**:
+- `bert_arousal_mean`: 原始興奮度
+- `× (1 - bert_negative_mean)`: 扣除負面成分
+- `× (1 - bert_advertisement_mean)`: 扣除廣告成分
+
+**案例對比**:
+
+| 情境 | Arousal | Negative | Advertisement | Clean Arousal | 解讀 |
+|-----|---------|----------|---------------|---------------|------|
+| **真實好評** | 0.8 | 0.1 | 0.1 | 0.8 × 0.9 × 0.9 = **0.65** | ✅ 真實興奮 |
+| **負評炎上** | 0.8 | 0.7 | 0.1 | 0.8 × 0.3 × 0.9 = **0.22** | ❌ 被負面打折 |
+| **業配廣告** | 0.8 | 0.1 | 0.8 | 0.8 × 0.9 × 0.2 = **0.14** | ❌ 被廣告打折 |
+| **平淡評論** | 0.3 | 0.1 | 0.1 | 0.3 × 0.9 × 0.9 = **0.24** | ⚠️ 原本就低 |
+
+**限制**:
+- 後來發現「負面炎上」本身也是強訊號（高討論度）
+- 因此在部分特徵中改用 RAW arousal
+
+---
+
+#### 6.3.2 強度分數 (Intensity Score)
+**目標**: 衡量商品的「**話題爆發力 vs 穩定回購力**」比例。
+
+```python
+df["intensity_score"] = (df["clean_arousal_score"] + df["bert_novelty_mean"]) / (df["bert_repurchase_mean"] + 0.1)
+```
+
+**公式拆解**:
+- **分子**: `clean_arousal + novelty` = 「話題性」（興奮 + 新奇）
+- **分母**: `repurchase + 0.1` = 「穩定性」（回購意圖）
+- **+0.1**: 避免除以 0
+
+**語意解釋**:
+
+| Intensity Score | 意義 | 典型商品 |
+|----------------|------|---------|
+| **高 (> 5)** | **話題性 >> 回購性** | 網紅推薦、限量聯名、話題商品（短期爆發） |
+| **中 (2-5)** | **話題與回購平衡** | 優質新品（既有話題又有品質） |
+| **低 (< 2)** | **回購性 >> 話題性** | 日用品、回購商品（穩定但平淡） |
+
+**案例對比**:
+
+| 商品類型 | Clean Arousal | Novelty | Repurchase | Intensity Score | 類型 |
+|---------|--------------|---------|------------|----------------|------|
+| **網紅聯名** | 0.7 | 0.8 | 0.1 | (0.7+0.8) / 0.2 = **7.5** | ✅ 話題爆品 |
+| **優質新品** | 0.6 | 0.5 | 0.4 | (0.6+0.5) / 0.5 = **2.2** | ✅ 平衡型 |
+| **日用品** | 0.3 | 0.2 | 0.6 | (0.3+0.2) / 0.7 = **0.7** | ⚠️ 穩定但無爆發 |
+
+**業務應用**:
+- 高 intensity = 適合「短期促銷、流量獲取」
+- 低 intensity = 適合「長期經營、會員回購」
+
+---
+
+#### 6.3.3 比例別名 (Ratio Aliases)
+為了與舊程式碼兼容，創建了別名：
+
+```python
+df["arousal_ratio"] = df["bert_arousal_mean"]
+df["novelty_ratio"] = df["bert_novelty_mean"]
+df["repurchase_ratio_recent"] = df["bert_repurchase_mean"]
+```
+
+**說明**: 這些「ratio」並非真正的比例，而是 BERT 的**機率分數**（0-1 之間）。命名為 `ratio` 是歷史遺留，實際上應理解為「該維度的平均強度」。
+
+---
+
+### 6.4 BERT vs 傳統方法的對比
+
+#### 傳統 Regex 方法
+```python
+# 舊方法：關鍵詞匹配
+arousal_count = COUNT(WHERE comment_text ~ '超讚|太好|愛死|驚艷')
+```
+
+**問題**:
+- ❌ 無法理解語境（"不是很讚" 也會匹配）
+- ❌ 無法捕捉同義詞（"amazing" 無法匹配中文詞典）
+- ❌ 無法量化程度（"好" vs "超級好" 都算一次）
+
+#### BERT Zero-Shot 方法
+```python
+# 新方法：語意理解
+bert_arousal_mean = AVG(BERT分類器(comment_text, label="興奮激動"))
+```
+
+**優勢**:
+- ✅ 理解語境（"不是很讚" → 低分；"超級讚" → 高分）
+- ✅ 泛化能力（"amazing"、"fantastic" 也能識別）
+- ✅ 機率分數（0.9 vs 0.5，量化信心程度）
+- ✅ 隱含意圖（"會再買" → 高 repurchase，即使沒說「回購」）
+
+---
+
+### 6.5 與其他層的關係
+
+```
+BERT 語意層 (Deep Semantic)
+    ↓ 提供「情緒」和「意圖」的深度理解
+    ↓
+物理層 (Kinematics)
+    ↓ 提供「量」的變化
+    ↓
+交互作用層 (Interaction)
+    ↓ 組合形成 price_weighted_arousal, novelty_momentum
+    ↓
+心理層 (Psychology)
+    ↓ 驗證「真實性」
+    ↓
+融合層 (Fusion)
+    ↓ 整合形成最終訊號
+```
+
+**定位**: BERT 語意層是「**深度特徵提取器**」，將「非結構化文本」轉換為「結構化情緒/意圖分數」。
+
+---
+
+### 6.6 關鍵洞察
+
+#### 洞察 1: 情緒 ≠ 情感極性
+**傳統觀念**: 情感分析 = 正面/負面二分類
+
+**BERT 語意層**: 
+- `arousal` = 情緒激動程度（正負皆可）
+- `negative` = 負面情緒強度
+- 兩者獨立，可以同時高（例如「氣炸了！」= 高 arousal + 高 negative）
+
+#### 洞察 2: 負面也是訊號
+**早期假設**: 負面評論應該過濾掉
+
+**研究發現 (2025-12-08)**: 
+- 負面炎上也會帶來高討論度和銷售
+- 因此在某些特徵中保留負面訊號（如 `price_weighted_arousal` 使用 RAW arousal）
+
+#### 洞察 3: 多維度優於單一情感分數
+**傳統**: sentiment_score (1-5) 
+
+**BERT 語意層**: 5 個獨立維度
+- 更豐富的信息
+- 可以捕捉複雜情緒組合（例如「有瑕疵但會回購」= 中 negative + 高 repurchase）
+
+#### 洞察 4: 平均值 vs 極值
+**設計選擇**: 使用 **AVG** 而非 MAX/COUNT
+
+**理由**:
+- AVG 捕捉「整體氛圍」
+- MAX 容易被極端案例影響
+- COUNT 無法量化程度
+
+**結論**: `bert_arousal_mean = 0.7` 表示「整體而言，這個商品的評論帶有中高程度的興奮情緒」，比「有 10 條超興奮評論」更有價值。
 ```
