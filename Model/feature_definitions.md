@@ -54,3 +54,39 @@
 *   **`comment_count_pre`**: 訓練截止日前累積總評論數。
 *   **`days_since_last_comment`**: 距離最後一則評論的天數 (Recency)。
 *   **`sentiment_mean_recent`**: 近期評論的平均情感分數。
+
+---
+
+## 4. 演算法層特徵 (Algorithm Layer)
+
+### 4.1 類別適配度 (Category Fit Score)
+**研究主題**: 以「品類共識」為基準，衡量該商品的評論內容是否為「典型代表」。
+
+#### 目標
+判斷商品是否符合該品類的「主流討論風格」。假設是：**爆品通常是「原型」(Prototypical)，非爆品則是「異類」(Outlier)**。
+
+#### 計算邏輯
+1.  **品類分群**: 依 `keyword` (關鍵詞/品類) 將商品分組。
+2.  **文字向量化**: 
+    *   對該品類所有商品的 `aggregated_comments` (所有評論內容的合併) 進行 **TF-IDF 向量化** (2000維)。
+    *   得到每個商品的「語意向量」 `X_text[i]`。
+3.  **計算品類中心點 (Centroid)**:
+    ```python
+    centroid = mean(X_text)  # 所有商品向量的平均
+    ```
+4.  **計算相似度 (Cosine Similarity)**:
+    *   對每個商品，計算其向量與中心點的 **餘弦距離 (Cosine Distance)**。
+    *   轉換為相似度分數：
+    ```python
+    category_fit_score = 1 - cosine_distance(X_text[i], centroid)
+    ```
+    *   分數範圍 [0, 1]。越接近 1 代表越「標準/典型」。
+
+#### 洞察 (Insight)
+*   **高分 (0.8+)**: 商品討論內容與品類主流高度一致 (例如「口罩」品類中提到「防護、過濾、舒適」)。
+*   **低分 (0.3-)**: 商品評論內容偏離品類共識 (例如「口罩」品類中卻都在討論「退貨、客服、品質差」)。
+
+**應用價值**:
+*   結合 `kin_acc_abs` (加速度) 使用，過濾掉「評論暴增但內容與品類無關」的異常商品 (可能是炎上或操作)。
+*   例如：`quality_driven_momentum = kin_acc_abs * category_fit_score`。
+
