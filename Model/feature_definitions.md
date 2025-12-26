@@ -972,4 +972,382 @@ BERT 語意層 (Deep Semantic)
 - COUNT 無法量化程度
 
 **結論**: `bert_arousal_mean = 0.7` 表示「整體而言，這個商品的評論帶有中高程度的興奮情緒」，比「有 10 條超興奮評論」更有價值。
+
+---
+
+## 7. 基礎與統計層 (Basic & Statistical) - 控制變數
+
+**研究主題**: 提供商品的**基本屬性**和**統計特徵**，作為其他高階特徵的「**控制變數**」或「**基準線**」。
+
+### 設計理念
+
+> **核心概念**: 在評估「爆品訊號」之前，需要先了解商品的「基本面」。例如，一個只有 5 條評論的商品即使加速度很高，也可能只是噪音；而一個有 1000 條評論的商品，加速度相同時意義完全不同。
+
+---
+
+### 7.1 靜態屬性 (Static Attributes)
+
+這些特徵在商品生命週期中**基本不變**或**變化緩慢**。
+
+#### 7.1.1 價格 (Price)
+```sql
+p.price::float AS price
 ```
+
+**意義**: 商品售價（元）
+
+**爆品關聯**:
+- 高價商品的「情緒密度」通常更高（已在 `price_weighted_arousal` 中應用）
+- 價格可能影響討論熱度（奢侈品 vs 日用品）
+
+**統計特性**:
+- **範圍**: 通常 10 - 50,000 元
+- **分布**: 右偏（大多數商品便宜，少數商品昂貴）
+- **處理**: 使用 `log1p(price)` 來平滑分布
+
+---
+
+#### 7.1.2 媒體豐富度特徵
+```sql
+has_image_urls     -- 是否有圖片（0/1）
+has_video_url      -- 是否有影片（0/1）
+has_reply_content  -- 是否有賣家回覆（0/1）
+```
+
+**意義**: 評論的「多媒體豐富程度」
+
+**假設**:
+- 有圖片/影片的評論 → 用戶投入度高 → 商品品質可能較好
+- 有賣家回覆 → 客服積極 → 用戶體驗較好
+
+**限制**:
+- 這些是**二元特徵**（有/無），無法量化程度
+- 可能受平台政策影響（例如某些品類鼓勵上傳圖片）
+
+---
+
+### 7.2 累積數據 (Cumulative Data)
+
+這些特徵代表商品「**從上架至今**」的累積表現。
+
+#### 7.2.1 累積評論數 (Comment Count Pre)
+```sql
+COUNT(*) AS comment_count_pre
+```
+
+**意義**: 訓練截止日前的**總評論數**
+
+**重要性**: ⭐⭐⭐⭐⭐（最重要的控制變數之一）
+
+**用途**:
+1. **音量驗證**: 區分「真實趨勢」vs「隨機波動」
+2. **成熟度判斷**: 結合 `is_mature_product` 區分新品/老品
+3. **打折因子**: 在 `early_bird_momentum` 中用於獎勵新品
+
+**典型值**:
+- 新品: 0-10 條
+- 正常商品: 10-100 條
+- 熱門商品: 100-1000 條
+- 超級爆品: 1000+ 條
+
+---
+
+#### 7.2.2 平均評分 (Score Mean)
+```sql
+AVG(score::float) AS score_mean
+```
+
+**意義**: 所有評論的平均星級評分（1-5）
+
+**假設**: 高評分商品更可能成為爆品
+
+**限制**:
+- **評分膨脹**: 大多數商品評分集中在 4-5 分（左偏分布）
+- **刷評問題**: 評分容易被操控
+- **更新**: 已被 `sentiment_mean_recent`（近期情感）和 BERT 語意特徵取代
+
+---
+
+#### 7.2.3 累積按讚數 (Like Count Sum)
+```sql
+SUM(like_count::int) AS like_count_sum
+```
+
+**意義**: 所有評論獲得的按讚總數
+
+**假設**: 高按讚數 → 評論有用/有趣 → 商品值得關注
+
+**限制**:
+- 與 `comment_count_pre` 高度相關（評論多 → 按讚多）
+- 可能不是獨立訊號
+
+---
+
+### 7.3 近期統計 (Recency Statistics)
+
+這些特徵捕捉**不同時間窗口**的評論數量。
+
+#### 時間窗口定義
+```sql
+comment_count_7d   -- 最近 7 天
+comment_count_30d  -- 最近 30 天
+comment_count_90d  -- 最近 90 天
+```
+
+**用途**:
+1. **活躍度指標**: 近期評論多 = 商品仍在活躍討論中
+2. **衰退偵測**: `comment_count_7d` 遠小於 `comment_count_90d` → 熱度衰退
+3. **比例計算**: 作為分母計算各種「近期比例」特徵
+
+---
+
+### 7.4 時間特徵 (Temporal Features)
+
+#### 7.4.1 距離最後評論天數 (Days Since Last Comment)
+```sql
+EXTRACT(EPOCH FROM (cutoff::timestamp - MAX(comment_date))) / 86400.0 AS days_since_last_comment
+```
+
+**意義**: 從最後一條評論到現在經過了**多少天**
+
+**重要性**: ⭐⭐⭐⭐⭐（最重要的活躍指標）
+
+**語意解釋**:
+
+| 天數範圍 | 意義 | 爆品機率 |
+|---------|------|---------|
+| **0-7 天** | 商品仍在活躍討論中 | 高 ✅ |
+| **8-30 天** | 討論減緩但未停止 | 中 ⚠️ |
+| **31-90 天** | 討論稀疏，可能已過熱度高峰 | 低 ❌ |
+| **> 90 天** | 商品基本「死亡」，無人討論 | 極低 🚫 |
+
+**特殊處理**:
+```python
+df.loc[df["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
+```
+**原因**: 沒有評論的商品，設為 365 天（最大懲罰）
+
+---
+
+### 7.5 趨勢分段 (Trend Segments)
+
+將近 90 天切分為 **3 個 30 天區段**，用於捕捉「加速/減速」趨勢。
+
+```sql
+-- 最近 30 天 (0-30 days before cutoff)
+comment_3rd_30d = COUNT(*) FILTER (WHERE comment_date >= cutoff - INTERVAL '30 days')
+
+-- 中間 30 天 (31-60 days before cutoff)
+comment_2nd_30d = COUNT(*) FILTER (WHERE comment_date >= cutoff - INTERVAL '60 days' 
+                                     AND comment_date < cutoff - INTERVAL '30 days')
+
+-- 早期 30 天 (61-90 days before cutoff)
+comment_1st_30d = COUNT(*) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days' 
+                                     AND comment_date < cutoff - INTERVAL '60 days')
+```
+
+**用途**: 計算 `ratio_recent30_to_prev60`（加速度比例）
+
+#### 衍生特徵: 近期 vs 前期比例
+```python
+df["ratio_recent30_to_prev60"] = df["comment_3rd_30d"] / (df["comment_1st_30d"] + df["comment_2nd_30d"] + 1e-6)
+```
+
+**意義**: 最近 30 天的評論量 / 前 60 天的評論量
+
+**語意解釋**:
+
+| 比例值 | 意義 | 趨勢 |
+|-------|------|------|
+| **> 2.0** | 近期評論量是前期的 2 倍以上 | 🔥 強加速 |
+| **1.0-2.0** | 近期評論量與前期相當或略高 | ⚠️ 穩定或微加速 |
+| **0.5-1.0** | 近期評論量低於前期 | 📉 減速 |
+| **< 0.5** | 近期評論量不到前期一半 | 🚫 快速衰退 |
+
+**應用**: 在 `validated_velocity` 中作為加速度訊號
+
+---
+
+### 7.6 關鍵字比例 (Keyword Ratios)
+
+基於**近期 90 天評論**計算各種內容特徵的比例。
+
+#### 7.6.1 情感平均分 (Sentiment Mean Recent)
+```sql
+AVG(score::float) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days') AS sentiment_mean_recent
+```
+
+**意義**: 近 90 天評論的平均星級評分（1-5）
+
+**vs `score_mean`**: 
+- `score_mean`: 全部評論的平均（包含很久以前的）
+- `sentiment_mean_recent`: **只看近期**，更能反映當前品質
+
+---
+
+#### 7.6.2 負評比例 (Negative Ratio Recent)
+```sql
+-- SQL 計算負評數
+neg_count_recent = COUNT(*) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days' AND score <= 2)
+
+-- Python 計算比例
+df["neg_ratio_recent"] = df["neg_count_recent"] / (df["comment_count_90d"] + 1)
+```
+
+**意義**: 近 90 天中，低分評論（≤2 星）的比例
+
+**假設**: 高負評比例 → 商品品質問題 → 不太可能成為好的爆品
+
+**限制**:
+- **粗糙**: 只用星級判斷，無法理解評論內容
+- **已被取代**: `bert_negative_mean` 提供更精確的負面情緒偵測
+
+---
+
+#### 7.6.3 促銷比例 (Promo Ratio Recent)
+```sql
+-- SQL 計算促銷關鍵字出現次數
+promo_count_recent = COUNT(*) FILTER (WHERE comment_date >= cutoff - INTERVAL '90 days' 
+                                       AND comment_text ~ '促銷|特價|打折|滿額|免運|團購')
+
+-- Python 計算比例
+df["promo_ratio_recent"] = df["promo_count_recent"] / (df["comment_count_90d"] + 1)
+```
+
+**意義**: 近 90 天中，提到「促銷」相關詞彙的評論比例
+
+**假設**: 
+- 高促銷比例 → 商品**靠價格戰**吸引討論，而非品質
+- 促銷驅動的熱度不持久
+
+**限制**:
+- **Regex 匹配**: 可能誤判（例如「不是特價」也會匹配）
+- **語境問題**: 「這個價格太貴不值得」不會被匹配，但其實是負面評價
+
+---
+
+### 7.7 歷史變動 (Historical Changes)
+
+這些特徵捕捉商品在**銷售數據**上的歷史變化模式。
+
+#### 7.7.1 曾經有銷量變化 (Had Any Change Pre)
+```sql
+MAX(CASE WHEN prev_sales IS NOT NULL 
+          AND sales_count IS DISTINCT FROM prev_sales 
+     THEN 1 ELSE 0 END) AS had_any_change_pre
+```
+
+**意義**: 在訓練截止日前，商品的銷量**是否曾經變化過**（0/1）
+
+**用途**:
+- **活躍度指標**: 1 = 商品有銷售記錄，0 = 可能是「殭屍商品」
+- **過濾器**: 排除從未有銷量變化的商品
+
+---
+
+#### 7.7.2 歷史增長次數 (Num Increases Pre)
+```sql
+COUNT(*) FILTER (WHERE prev_sales IS NOT NULL 
+                   AND sales_count > prev_sales) AS num_increases_pre
+```
+
+**意義**: 在訓練截止日前，銷量**增長的次數**
+
+**語意解釋**:
+
+| 增長次數 | 意義 |
+|---------|------|
+| **0** | 從未增長（新品或滯銷品） |
+| **1-3** | 偶爾增長（正常商品） |
+| **4-10** | 經常增長（穩定熱銷品） |
+| **> 10** | 持續增長（超級爆品或刷單） |
+
+**用途**: 區分「首次爆發」vs「持續成長」
+
+---
+
+### 7.8 特徵層級結構
+
+```
+基礎與統計層
+├── 靜態屬性 (商品固有特性)
+│   ├── price
+│   └── has_image_urls, has_video_url, has_reply_content
+│
+├── 累積數據 (全生命週期)
+│   ├── comment_count_pre (⭐⭐⭐⭐⭐ 最重要控制變數)
+│   ├── score_mean
+│   └── like_count_sum
+│
+├── 近期統計 (時間窗口)
+│   ├── comment_count_7d
+│   ├── comment_count_30d
+│   └── comment_count_90d (⭐⭐⭐⭐ 常用分母)
+│
+├── 時間特徵 (活躍度)
+│   └── days_since_last_comment (⭐⭐⭐⭐⭐ 最重要活躍指標)
+│
+├── 趨勢分段 (加速度基礎)
+│   ├── comment_1st_30d, comment_2nd_30d, comment_3rd_30d
+│   └── ratio_recent30_to_prev60
+│
+├── 關鍵字比例 (內容特性)
+│   ├── sentiment_mean_recent
+│   ├── neg_ratio_recent
+│   └── promo_ratio_recent
+│
+└── 歷史變動 (銷售軌跡)
+    ├── had_any_change_pre
+    └── num_increases_pre
+```
+
+---
+
+### 7.9 為什麼需要「控制變數」？
+
+#### 問題: 不控制基礎變數會發生什麼？
+
+**案例 1: 音量效應**
+- 商品 A: 從 1 條 → 5 條評論（+400%）
+- 商品 B: 從 100 條 → 120 條評論（+20%）
+- **不控制**: 模型可能把 A 判為爆品（加速度高）
+- **控制後**: `early_bird_momentum` 會獎勵 A，但 `validated_velocity` 會懲罰 A（音量太低）
+
+**案例 2: 活躍度效應**
+- 商品 C: 100 條評論，但最後一條是 90 天前
+- 商品 D: 50 條評論，但最後一條是昨天
+- **不控制**: 模型可能優先考慮 C（累積評論多）
+- **控制後**: `days_since_last_comment` 會懲罰 C，獎勵 D
+
+---
+
+### 7.10 關鍵洞察
+
+#### 洞察 1: 絕對值 vs 相對值
+**基礎層提供「絕對值」，高階層計算「相對值」**
+
+- `comment_count_90d` = 絕對值（100 條）
+- `ratio_recent30_to_prev60` = 相對值（近期是前期的 2 倍）
+- **兩者結合**: `validated_velocity = ratio × log1p(volume)` → 既看趨勢又看音量
+
+#### 洞察 2: 時間衰減
+**近期數據比歷史數據更重要**
+
+- `score_mean` (全時期) → `sentiment_mean_recent` (近 90 天)
+- `comment_count_pre` (累積) → `comment_count_90d` (近期)
+
+#### 洞察 3: 多粒度時間窗口
+**不同窗口捕捉不同頻率的訊號**
+
+- `comment_count_7d`: 捕捉「本週爆發」
+- `comment_count_30d`: 捕捉「本月趨勢」
+- `comment_count_90d`: 捕捉「季度穩定性」
+
+#### 洞察 4: 活躍度 > 累積量
+**`days_since_last_comment` 比 `comment_count_pre` 更能預測未來潛力**
+
+- 1000 條評論但 90 天無更新 → 過氣商品
+- 10 條評論但每天都有新的 → 潛力新品
+
+**結論**: 基礎統計層不是「主角」，而是「配角」—— 它們提供**基準線**和**控制變數**，讓高階特徵（物理層、BERT 層、融合層）能夠更準確地捕捉「爆品訊號」。
+
