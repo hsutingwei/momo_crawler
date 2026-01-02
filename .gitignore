@@ -25,6 +25,8 @@ Thumbs.db
 *.csv
 *.json
 
+*.parquet
+
 error_report_*.txt
 clean_decimal_report_*.csv
 fix_decreasing_report_*.csv
