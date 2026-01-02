@@ -136,10 +136,6 @@ def parse_args():
     ap.add_argument('--fail-on-leakage', action='store_true', default=True,
                     help='發現 leakage 時立即失敗')
     
-    # 資料庫
-    ap.add_argument('--enable-db-logging', action='store_true', default=True,
-                    help='啟用 PostgreSQL 記錄')
-    
     # 標籤策略
     ap.add_argument('--label-strategy', type=str, default='hybrid',
                     choices=['absolute', 'hybrid'],
@@ -449,44 +445,43 @@ def train_with_new_pipeline(args):
         'scaler': 'none'
     })
     
-    # 資料庫記錄
+    # 資料庫記錄 (自動啟用)
     conn = None
-    if args.enable_db_logging:
-        try:
-            conn = get_db_connection()
-            insert_run_start(
-                conn,
-                run_id=run_id,
-                git_commit=git_info['git_commit'],
-                git_branch=git_info['git_branch'],
-                git_dirty=git_info['git_dirty'],
-                runner=os.getenv('USER', 'unknown'),
-                command=' '.join(sys.argv),
-                config=config,
-                date_cutoff=args.date_cutoff,
-                label_strategy=args.label_strategy,
-                label_params={
-                    'delta_threshold': args.label_delta_threshold,
-                    'ratio_threshold': args.label_ratio_threshold
-                },
-                split_strategy=args.cv_strategy,
-                cv_params={'n_folds': args.n_folds, 'random_seed': args.random_seed},
-                preprocess_fit_scope=args.preprocess_fit_scope,
-                pipeline_version=args.pipeline_version or 'v2.0',
-                code_fingerprint_hash=code_fingerprint,
-                feature_set=args.feature_set,
-                model_type=args.model_type,
-                model_params={'default': True}
-            )
-            
-            # 更新樣本
-            upsert_samples(conn, run_id, samples_df)
-            upsert_features(conn, run_id, available_features, active=True)
-            
-            print("  ✅ 資料庫記錄已初始化")
-        except Exception as e:
-            print(f"  ⚠️  資料庫記錄失敗: {e}")
-            conn = None
+    try:
+        conn = get_db_connection()
+        insert_run_start(
+            conn,
+            run_id=run_id,
+            git_commit=git_info['git_commit'],
+            git_branch=git_info['git_branch'],
+            git_dirty=git_info['git_dirty'],
+            runner=os.getenv('USER', 'unknown'),
+            command=' '.join(sys.argv),
+            config=config,
+            date_cutoff=args.date_cutoff,
+            label_strategy=args.label_strategy,
+            label_params={
+                'delta_threshold': args.label_delta_threshold,
+                'ratio_threshold': args.label_ratio_threshold
+            },
+            split_strategy=args.cv_strategy,
+            cv_params={'n_folds': args.n_folds, 'random_seed': args.random_seed},
+            preprocess_fit_scope=args.preprocess_fit_scope,
+            pipeline_version=args.pipeline_version or 'v2.0',
+            code_fingerprint_hash=code_fingerprint,
+            feature_set=args.feature_set,
+            model_type=args.model_type,
+            model_params={'default': True}
+        )
+        
+        # 更新樣本
+        upsert_samples(conn, run_id, samples_df)
+        upsert_features(conn, run_id, available_features, active=True)
+        
+        print("  ✅ 資料庫記錄已初始化")
+    except Exception as e:
+        print(f"  ⚠️  資料庫記錄失敗 (繼續執行): {e}")
+        conn = None
     
     # ========================================================================
     # ========================================================================
