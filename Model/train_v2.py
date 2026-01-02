@@ -276,6 +276,36 @@ def train_with_new_pipeline(args):
         )
     
     # ========================================================================
+    # ABLATION CONTROL: 驗證 Fold 數量一致性 (Fold Count Validation)
+    # ========================================================================
+    train_pool_folds = splits_df[splits_df['split'] == 'train_pool']['fold_id'].unique()
+    n_unique_folds = len(train_pool_folds)
+    max_fold_id = splits_df[splits_df['split'] == 'train_pool']['fold_id'].max()
+    
+    print(f"\n  🔍 驗證 Fold 數量...")
+    print(f"    指定 n_folds: {args.n_folds}")
+    print(f"    實際 unique folds: {n_unique_folds}")
+    print(f"    Fold ID 範圍: {sorted(train_pool_folds)}")
+    
+    if n_unique_folds != args.n_folds:
+        raise ValueError(
+            f"❌ Fold 數量不匹配 (Fold Count Mismatch)!\n"
+            f"  指定: {args.n_folds} folds\n"
+            f"  實際: {n_unique_folds} folds\n"
+            f"  Fold IDs: {sorted(train_pool_folds)}\n"
+            f"  → 請檢查 splits 生成邏輯或 --force-use-splits 路徑"
+        )
+    
+    if max_fold_id != args.n_folds - 1:
+        raise ValueError(
+            f"❌ Fold ID 範圍錯誤!\n"
+            f"  預期最大 fold_id: {args.n_folds - 1}\n"
+            f"  實際最大 fold_id: {max_fold_id}\n"
+            f"  → Fold ID 應該從 0 到 {args.n_folds - 1}"
+        )
+    
+    print(f"  ✅ Fold 數量驗證通過: {args.n_folds} folds")
+    
     # ========================================================================
     # 步驟 4: 計算 Hashes
     # ========================================================================
@@ -470,6 +500,7 @@ def train_with_new_pipeline(args):
     test_set = samples_df[samples_df['split'] == 'test']
     
     all_oof_preds = []
+    fold_metrics = []  # 儲存每個 fold 的指標
     
     for fold in range(args.n_folds):
         print(f"\n  Fold {fold+1}/{args.n_folds}...")
@@ -541,6 +572,20 @@ def train_with_new_pipeline(args):
         y_prob = model.predict_proba(X_val_transformed)[:, 1]
         y_pred = (y_prob > 0.5).astype(int)
         
+        # 計算本 fold 的指標
+        fold_auc = roc_auc_score(y_val, y_prob)
+        fold_f1 = f1_score(y_val, y_pred)
+        fold_precision = precision_score(y_val, y_pred)
+        fold_recall = recall_score(y_val, y_pred)
+        
+        fold_metrics.append({
+            'fold': fold,
+            'auc': fold_auc,
+            'f1': fold_f1,
+            'precision': fold_precision,
+            'recall': fold_recall
+        })
+        
         # 儲存 OOF 預測
         val_preds = val_fold_df[['product_id', 'y_true']].copy()
         val_preds['fold_id'] = fold
@@ -551,10 +596,7 @@ def train_with_new_pipeline(args):
         
         all_oof_preds.append(val_preds)
         
-        # 指標
-        auc = roc_auc_score(y_val, y_prob)
-        f1 = f1_score(y_val, y_pred)
-        print(f"    AUC: {auc:.4f}, F1: {f1:.4f}")
+        print(f"    AUC: {fold_auc:.4f}, F1: {fold_f1:.4f}")
     
     # ========================================================================
     # 步驟 9: 最終模型訓練與測試評估
@@ -658,41 +700,55 @@ def train_with_new_pipeline(args):
     test_preds['y_pred'] = (test_preds['y_prob'] > chosen_threshold).astype(int)
     test_preds['threshold'] = chosen_threshold
     
-    # 計算指標
-    oof_auc = roc_auc_score(oof_preds_df['y_true'], oof_preds_df['y_prob'])
-    oof_f1 = f1_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
+    # 計算 Per-Fold 統計量
+    fold_aucs = [m['auc'] for m in fold_metrics]
+    fold_f1s = [m['f1'] for m in fold_metrics]
+    
+    import numpy as np
+    
+    # 計算全局 OOF 指標 (拼接所有 fold)
+    oof_global_auc = roc_auc_score(oof_preds_df['y_true'], oof_preds_df['y_prob'])
+    oof_global_f1 = f1_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
+    oof_global_precision = precision_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
+    oof_global_recall = recall_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
+    
+    # 計算測試集指標
     test_auc = roc_auc_score(test_preds['y_true'], test_preds['y_prob'])
     test_f1 = f1_score(test_preds['y_true'], test_preds['y_pred'])
+    test_precision = precision_score(test_preds['y_true'], test_preds['y_pred'])
+    test_recall = recall_score(test_preds['y_true'], test_preds['y_pred'])
     
     metrics = {
-        'oof_aggregate': {
-            'auc': {'mean': oof_auc, 'std': 0.0},  # TODO: 計算 per-fold std
-            'f1': {'mean': oof_f1, 'std': 0.0}
+        'oof_by_fold': fold_metrics,  # 每個 fold 的詳細指標
+        'oof_aggregate': {  # Fold-level 的均值和標準差
+            'auc': {'mean': float(np.mean(fold_aucs)), 'std': float(np.std(fold_aucs, ddof=1))},
+            'f1': {'mean': float(np.mean(fold_f1s)), 'std': float(np.std(fold_f1s, ddof=1))}
         },
-        'oof_global': {
-            'auc': oof_auc,
-            'f1': oof_f1,
-            'precision': precision_score(oof_preds_df['y_true'], oof_preds_df['y_pred']),
-            'recall': recall_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
+        'oof_global': {  # 拼接所有 OOF 後計算（單值）
+            'auc': float(oof_global_auc),
+            'f1': float(oof_global_f1),
+            'precision': float(oof_global_precision),
+            'recall': float(oof_global_recall)
         },
         'test': {
-            'auc': test_auc,
-            'f1': test_f1,
-            'precision': precision_score(test_preds['y_true'], test_preds['y_pred']),
-            'recall': recall_score(test_preds['y_true'], test_preds['y_pred'])
+            'auc': float(test_auc),
+            'f1': float(test_f1),
+            'precision': float(test_precision),
+            'recall': float(test_recall)
         },
         'threshold': {
-            'value': 0.5,
+            'value': float(chosen_threshold),
             'method': args.threshold_mode,
-            'source': 'fixed'
+            'source': 'fixed' if args.threshold_mode == 'fixed' else ('locked' if args.threshold_mode == 'locked' else 'tuned')
         }
     }
     
     manager.save_metrics(metrics)
     manager.save_chosen_threshold({'value': 0.5, 'method': 'fixed'})
     
-    print(f"  OOF AUC: {oof_auc:.4f}, F1: {oof_f1:.4f}")
-    print(f"  Test AUC: {test_auc:.4f}, F1: {test_f1:.4f}")
+    print(f"  OOF (Aggregate): AUC = {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs, ddof=1):.4f}, F1 = {np.mean(fold_f1s):.4f} ± {np.std(fold_f1s, ddof=1):.4f}")
+    print(f"  OOF (Global):    AUC = {oof_global_auc:.4f}, F1 = {oof_global_f1:.4f}")
+    print(f"  Test:            AUC = {test_auc:.4f}, F1 = {test_f1:.4f}")
     
     # 資料庫記錄
     if conn:
