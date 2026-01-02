@@ -122,10 +122,12 @@ def parse_args():
                     choices=['fold_train', 'train_pool'],
                     help='scale_pos_weight 計算範圍')
     
-    # Threshold
+    # Threshold strategy
     ap.add_argument('--threshold-mode', type=str, default='fixed',
-                    choices=['fixed', 'tuned'],
-                    help='Threshold 模式：fixed（0.5）或 tuned（OOF 搜尋）')
+                    choices=['fixed', 'tuned', 'locked'],
+                    help='Threshold 模式：fixed(0.5)、tuned(OOF搜尋)、locked(使用baseline)')
+    ap.add_argument('--threshold-path', type=str, default=None,
+                    help='Locked threshold 路徑 (threshold_mode=locked 時必須)')
     
     # Leakage prevention
     ap.add_argument('--preprocess-fit-scope', type=str, default='train_fold_only',
@@ -162,6 +164,10 @@ def parse_args():
                     help='XGBoost 訓練線程數（建議為 CPU 線程數的一半）')
     ap.add_argument('--gpu-id', type=int, default=0,
                     help='GPU 設備 ID')
+    
+    # Ablation study controls (CRITICAL for reproducibility)
+    ap.add_argument('--force-use-splits', type=str, default=None,
+                    help='強制使用指定的 splits.parquet 路徑（確保 baseline 和 variants 使用相同 splits）')
     
     return ap.parse_args()
 
@@ -243,17 +249,31 @@ def train_with_new_pipeline(args):
     print("📋 Step 3: Creating Splits")
     print("="*80)
     
-    splits_df = make_splits(
-        df_full,
-        holdout_strategy=args.holdout_strategy,
-        cv_strategy=args.cv_strategy,
-        group_key=args.group_key,
-        test_size=args.test_size,
-        n_folds=args.n_folds,
-        random_seed=args.random_seed,
-        save_splits_path=os.path.join(run_dir, 'splits.parquet'),
-        force_resplit=False
-    )
+    # ABLATION CONTROL: Force use of baseline splits
+    if args.force_use_splits:
+        print(f"  ⚠️  Loading forced splits from: {args.force_use_splits}")
+        if not os.path.exists(args.force_use_splits):
+            raise FileNotFoundError(f"Forced splits file not found: {args.force_use_splits}")
+        
+        splits_df = pd.read_parquet(args.force_use_splits)
+        
+        # Copy to current run dir for archiving
+        import shutil
+        shutil.copy(args.force_use_splits, os.path.join(run_dir, 'splits.parquet'))
+        print(f"  ✅ Loaded {len(splits_df)} samples from forced splits")
+    else:
+        # Normal split creation
+        splits_df = make_splits(
+            df_full,
+            holdout_strategy=args.holdout_strategy,
+            cv_strategy=args.cv_strategy,
+            group_key=args.group_key,
+            test_size=args.test_size,
+            n_folds=args.n_folds,
+            random_seed=args.random_seed,
+            save_splits_path=os.path.join(run_dir, 'splits.parquet'),
+            force_resplit=False
+        )
     
     # ========================================================================
     # Step 4: Compute Hashes
@@ -271,6 +291,47 @@ def train_with_new_pipeline(args):
     
     print(f"  dataset_hash: {dataset_hash}")
     print(f"  split_hash: {split_hash}")
+    
+    # ========================================================================
+    # ABLATION CONTROL: Hash Verification for Locked Mode
+    # ========================================================================
+    if args.hyperparameter_mode == 'locked':
+        print("\n  🔐 Verifying Hash Consistency (Ablation Mode)...")
+        
+        if not args.baseline_params_path:
+            raise ValueError("--baseline-params-path required for hyperparameter_mode=locked")
+        
+        if not os.path.exists(args.baseline_params_path):
+            raise FileNotFoundError(f"Baseline params not found: {args.baseline_params_path}")
+        
+        with open(args.baseline_params_path, 'r', encoding='utf-8') as f:
+            baseline_params = json.load(f)
+        
+        # Verify split_hash matches
+        baseline_split_hash = baseline_params.get('split_hash')
+        if baseline_split_hash != split_hash:
+            raise ValueError(
+                f"❌ Split hash mismatch!\n"
+                f"  Baseline: {baseline_split_hash}\n"
+                f"  Current:  {split_hash}\n"
+                f"  → You are using different splits!\n"
+                f"  → Use --force-use-splits to load baseline splits"
+            )
+        
+        # Verify dataset_hash matches
+        baseline_dataset_hash = baseline_params.get('dataset_hash')
+        if baseline_dataset_hash != dataset_hash:
+            raise ValueError(
+                f"❌ Dataset hash mismatch!\n"
+                f"  Baseline: {baseline_dataset_hash}\n"
+                f"  Current:  {dataset_hash}\n"
+                f"  → Check: --date-cutoff, --label-strategy, --exclude-products\n"
+                f"  → All data loading parameters must match baseline!"
+            )
+        
+        print(f"  ✅ split_hash verified: {split_hash}")
+        print(f"  ✅ dataset_hash verified: {dataset_hash}")
+        print(f"  ✅ Ablation study consistency PASSED!")
     
     # ========================================================================
     # Step 5: Feature Engineering
@@ -562,6 +623,36 @@ def train_with_new_pipeline(args):
     manager.save_predictions_oof(oof_preds_df)
     manager.save_predictions_test(test_preds)
     
+    # ========================================================================
+    # ABLATION CONTROL: Threshold Locking
+    # ========================================================================
+    if args.threshold_mode == 'locked':
+        if not args.threshold_path:
+            raise ValueError("--threshold-path required for threshold_mode=locked")
+        
+        if not os.path.exists(args.threshold_path):
+            raise FileNotFoundError(f"Threshold file not found: {args.threshold_path}")
+        
+        with open(args.threshold_path, 'r', encoding='utf-8') as f:
+            baseline_threshold_info = json.load(f)
+        
+        chosen_threshold = baseline_threshold_info['value']
+        print(f"\n  🔒 Using locked threshold: {chosen_threshold:.4f} (from baseline)")
+    elif args.threshold_mode == 'tuned':
+        # TODO: Implement threshold tuning on OOF predictions
+        # For now, use simple fixed threshold
+        chosen_threshold = 0.5
+        print(f"\n  ⚙️  Threshold tuning not yet implemented, using 0.5")
+    else:  # fixed
+        chosen_threshold = 0.5
+        print(f"\n  📌 Using fixed threshold: {chosen_threshold}")
+    
+    # Re-apply threshold to predictions
+    oof_preds_df['y_pred'] = (oof_preds_df['y_prob'] > chosen_threshold).astype(int)
+    oof_preds_df['threshold'] = chosen_threshold
+    test_preds['y_pred'] = (test_preds['y_prob'] > chosen_threshold).astype(int)
+    test_preds['threshold'] = chosen_threshold
+    
     # Compute metrics
     oof_auc = roc_auc_score(oof_preds_df['y_true'], oof_preds_df['y_prob'])
     oof_f1 = f1_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
@@ -633,6 +724,47 @@ def train_with_new_pipeline(args):
         print(f"  ⚠️  Missing: {verification['missing']}")
     
     manager.save_artifact_summary()
+    
+    # ========================================================================
+    # ABLATION CONTROL: Save Baseline Best Params (if baseline + tuning)
+    # ========================================================================
+    if args.feature_set == 'baseline' and args.hyperparameter_mode == 'tuning':
+        print("\n" + "="*80)
+        print("💾 Saving Baseline Best Params for Ablation Study")
+        print("="*80)
+        
+        baseline_params = {
+            'split_hash': split_hash,
+            'dataset_hash': dataset_hash,
+            'feature_transform_profile': args.feature_transform_profile,
+            'imbalance_mode': args.imbalance_mode,
+            'scale_pos_weight_scope': args.scale_pos_weight_scope,
+            'threshold_mode': args.threshold_mode,
+            'cv_metric': 'auc',  # Primary metric for comparison
+            'tuning_trials': 1,  # TODO: Implement actual hyperparameter tuning
+            'best_params': {
+                'max_depth': 6,
+                'learning_rate': 0.1,
+                'n_estimators': 100
+                # TODO: Replace with actual tuned params when tuning implemented
+            },
+            'ablation_instructions': {
+                'usage': 'Use these params for all feature variants',
+                'locked_command_example': (
+                    f"python Model/train_v2.py "
+                    f"--hyperparameter-mode locked "
+                    f"--baseline-params-path {run_dir}/baseline_best_params.json "
+                    f"--threshold-mode locked "
+                    f"--threshold-path {run_dir}/chosen_threshold.json "
+                    f"--force-use-splits {run_dir}/splits.parquet"
+                )
+            },
+            'created_at': datetime.now().isoformat()
+        }
+        
+        save_baseline_best_params(run_dir, baseline_params)
+        print(f"  ✅ Saved baseline_best_params.json")
+        print(f"  ✅ Use this for ablation study variants")
     
     # ========================================================================
     # Final Summary

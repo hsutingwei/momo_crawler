@@ -288,7 +288,20 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     
     Returns:
         允許的特徵名稱列表
+    
+    Important: Feature sets are CUMULATIVE (逐層累加)
+    - baseline: 基础统计特征
+    - +physical: baseline + 运动学特征 (含 quality_driven_momentum)
+    - +semantic: +physical + 语义特征
+    - +psych: +semantic + 心理层特征
+    
+    Note: quality_driven_momentum 需要 category_fit_score，
+          但在消融实验中归类为 physical layer (复合动量)
     """
+    # Forbidden features (NEVER include these)
+    # These should be filtered out before calling FeatureTransformer
+    FORBIDDEN = ['product_id', 'y_true', 'fold_id', 'split', 'keyword']
+    
     # Baseline features (基礎特徵)
     baseline = [
         'price', 'comment_count_pre', 'score_mean', 'like_count_sum',
@@ -299,18 +312,22 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     ]
     
     # Physical features (動力學特徵)
+    # Note: quality_driven_momentum 虽然使用 category_fit_score，
+    #       但在消融实验中归类为 physical layer
     physical = [
         'kin_v_1', 'kin_v_2', 'kin_v_3',
         'kin_acc_abs', 'kin_acc_rel',
         'kin_jerk_abs',
-        'early_bird_momentum', 'quality_driven_momentum'
+        'early_bird_momentum', 
+        'quality_driven_momentum',  # = kin_acc_abs × category_fit_score
+        'category_fit_score'  # Required for quality_driven_momentum
     ]
     
     # Semantic features (語義特徵)
     semantic = [
         'bert_arousal', 'bert_novelty', 'bert_repurchase',
-        'bert_negative', 'bert_advertisement',
-        'category_fit_score'
+        'bert_negative', 'bert_advertisement'
+        # Note: category_fit_score already in physical layer
     ]
     
     # Psychological features (心理學特徵)
@@ -330,6 +347,7 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
         return baseline + physical + semantic + psych
     else:
         raise ValueError(f"Unknown feature_set: {feature_set}")
+
 
 
 def validate_feature_whitelist(
