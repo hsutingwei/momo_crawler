@@ -100,6 +100,29 @@ def insert_run_start(
               %s, %s::jsonb,
               %s, %s
             )
+            ON CONFLICT (run_id) DO UPDATE SET
+              status = EXCLUDED.status,
+              created_at = EXCLUDED.created_at,
+              git_commit = EXCLUDED.git_commit,
+              git_branch = EXCLUDED.git_branch,
+              git_dirty = EXCLUDED.git_dirty,
+              runner = EXCLUDED.runner,
+              command = EXCLUDED.command,
+              config_json = EXCLUDED.config_json,
+              date_cutoff = EXCLUDED.date_cutoff,
+              label_strategy = EXCLUDED.label_strategy,
+              label_params = EXCLUDED.label_params,
+              split_strategy = EXCLUDED.split_strategy,
+              cv_params = EXCLUDED.cv_params,
+              preprocess_fit_scope = EXCLUDED.preprocess_fit_scope,
+              pipeline_version = EXCLUDED.pipeline_version,
+              code_fingerprint_hash = EXCLUDED.code_fingerprint_hash,
+              feature_set = EXCLUDED.feature_set,
+              model_type = EXCLUDED.model_type,
+              model_params = EXCLUDED.model_params,
+              dataset_hash = EXCLUDED.dataset_hash,
+              split_hash = EXCLUDED.split_hash
+
             """,
             (
                 run_id,
