@@ -173,9 +173,9 @@ def load_real_data(args):
         top_n=200,  # TF-IDF top 200 features
         label_strategy=args.label_strategy,
         label_delta_threshold=args.label_delta_threshold,
-        label_ratio_threshold=args.label_ratio_threshold,
-        exclude_products=args.exclude_products.split(',') if args.exclude_products else None,
-        vocab_scope='global'
+        label_params={'ratio_threshold': args.label_ratio_threshold} if args.label_strategy == 'hybrid' else None,
+        exclude_products=[int(p) for p in args.exclude_products.split(',')] if args.exclude_products else None,
+        vocab_mode='global'
     )
     
     print(f"✅ Loaded real data:")
