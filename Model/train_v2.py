@@ -686,10 +686,23 @@ def train_with_new_pipeline(args):
         chosen_threshold = baseline_threshold_info['value']
         print(f"\n  🔒 使用鎖定閾值: {chosen_threshold:.4f} (來自 baseline)")
     elif args.threshold_mode == 'tuned':
-        # TODO: 實現 OOF 預測的閾值調整
-        # 目前使用簡單的固定閾值
-        chosen_threshold = 0.5
-        print(f"\n  ⚙️  閾值調整尚未實現, 使用 0.5")
+        print(f"\n  ⚙️  正在根據 OOF F1 Score 調整閾值...")
+        thresholds = np.arange(0.01, 1.00, 0.01)
+        best_f1 = -1
+        best_th = 0.5
+        y_true = oof_preds_df['y_true'].values
+        y_prob = oof_preds_df['y_prob'].values
+        
+        for th in thresholds:
+            y_pred_th = (y_prob > th).astype(int)
+            score = f1_score(y_true, y_pred_th)
+            if score > best_f1:
+                best_f1 = score
+                best_th = th
+                
+        chosen_threshold = float(best_th)
+        print(f"  ✅ 最佳閾值: {chosen_threshold:.4f} (OOF F1: {best_f1:.4f})")
+        
     else:  # fixed
         chosen_threshold = 0.5
         print(f"\n  📌 使用固定閾值: {chosen_threshold}")
@@ -744,7 +757,11 @@ def train_with_new_pipeline(args):
     }
     
     manager.save_metrics(metrics)
-    manager.save_chosen_threshold({'value': 0.5, 'method': 'fixed'})
+    manager.save_chosen_threshold({
+        'value': float(chosen_threshold), 
+        'method': args.threshold_mode,
+        'source': 'fixed' if args.threshold_mode == 'fixed' else ('locked' if args.threshold_mode == 'locked' else 'tuned')
+    })
     
     print(f"  OOF (Aggregate): AUC = {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs, ddof=1):.4f}, F1 = {np.mean(fold_f1s):.4f} ± {np.std(fold_f1s, ddof=1):.4f}")
     print(f"  OOF (Global):    AUC = {oof_global_auc:.4f}, F1 = {oof_global_f1:.4f}")
