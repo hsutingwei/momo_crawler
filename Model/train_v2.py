@@ -5,11 +5,11 @@ Model/train_v2.py
 
 特性:
 - 固定 8:2 split + K-fold CV (可復現)
-- Hash tracking (dataset/split/feature)
-- 5 個自動化 leakage checks
+- Hash 追蹤 (dataset/split/feature)
+- 5 個自動化数据洩漏檢查
 - PostgreSQL 實驗記錄
-- 15+ artifacts per run
-- Ablation study 支援
+- 每次運行生成 15+ 個 artifacts
+- 支援消融研究 (Ablation study)
 
 用法:
 python Model/train_v2.py \
@@ -21,10 +21,10 @@ python Model/train_v2.py \
   --run-id my_experiment_001
 
 與 train.py 的差異:
-- 使用固定 split (不是 date cutoff split)
-- 自動 leakage prevention
-- 完整 artifact 管理
-- PostgreSQL logging
+- 使用固定 split (不是基於日期的 cutoff split)
+- 自動防止数据洩漏
+- 完整的 artifact 管理
+- PostgreSQL 記錄日誌
 """
 
 import os
@@ -40,10 +40,10 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 import xgboost as xgb
 
-# Import data loader
+# 匯入數據加載器
 from data_loader import load_product_level_training_set
 
-# Import new ML Pipeline modules
+# 匯入新的 ML Pipeline 模組
 from experiment_utils import (
     make_splits, compute_dataset_hash, compute_split_hash, compute_feature_hash,
     get_feature_whitelist, validate_feature_whitelist, get_git_info,
@@ -61,9 +61,9 @@ from artifact_manager import ArtifactManager, save_baseline_best_params
 
 def parse_args():
     """解析命令行參數"""
-    ap = argparse.ArgumentParser(description='ML Pipeline v2 - Production Training')
+    ap = argparse.ArgumentParser(description='ML Pipeline v2 - 生產環境訓練')
     
-    # Basic settings
+    # 基本設定
     ap.add_argument('--mode', type=str, default='product_level',
                     choices=['product_level'],
                     help='訓練模式（目前只支援 product_level）')
@@ -72,15 +72,15 @@ def parse_args():
     ap.add_argument('--pipeline-version', type=str, default=None,
                     help='資料處理流程版本號')
     
-    # Run identification
+    # 運行識別
     ap.add_argument('--run-id', type=str, default=None,
                     help='實驗 Run ID（若不指定則自動生成）')
     ap.add_argument('--group-id', type=str, default=None,
-                    help='Ablation study group ID（用於關聯多個實驗）')
+                    help='消融研究 Group ID（用於關聯多個實驗）')
     ap.add_argument('--output-dir', type=str, default='runs',
                     help='輸出目錄')
     
-    # Feature engineering
+    # 特徵工程
     ap.add_argument('--feature-set', type=str, default='baseline',
                     choices=['baseline', '+physical', '+semantic', '+psych'],
                     help='特徵集合')
@@ -88,7 +88,7 @@ def parse_args():
                     choices=['none', 'phaseA', 'phaseB'],
                     help='特徵轉換 profile')
     
-    # Split strategy
+    # 切分策略
     ap.add_argument('--n-folds', type=int, default=10,
                     help='K-fold CV 折數')
     ap.add_argument('--test-size', type=float, default=0.2,
@@ -104,7 +104,7 @@ def parse_args():
     ap.add_argument('--group-key', type=str, default=None,
                     help='Group split 使用的欄位（keyword/category）')
     
-    # Model settings
+    # 模型設定
     ap.add_argument('--model-type', type=str, default='xgboost',
                     choices=['xgboost'],
                     help='模型類型（目前只支援 xgboost）')
@@ -114,7 +114,7 @@ def parse_args():
     ap.add_argument('--baseline-params-path', type=str, default=None,
                     help='Baseline best params 路徑（hyperparameter_mode=locked 時必須）')
     
-    # Imbalance handling
+    # 不平衡處理
     ap.add_argument('--imbalance-mode', type=str, default='scale_pos_weight',
                     choices=['scale_pos_weight', 'none'],
                     help='類不平衡處理模式')
@@ -122,25 +122,25 @@ def parse_args():
                     choices=['fold_train', 'train_pool'],
                     help='scale_pos_weight 計算範圍')
     
-    # Threshold strategy
+    # 閾值設定
     ap.add_argument('--threshold-mode', type=str, default='fixed',
                     choices=['fixed', 'tuned', 'locked'],
                     help='Threshold 模式：fixed(0.5)、tuned(OOF搜尋)、locked(使用baseline)')
     ap.add_argument('--threshold-path', type=str, default=None,
                     help='Locked threshold 路徑 (threshold_mode=locked 時必須)')
     
-    # Leakage prevention
+    # 資料洩漏防止
     ap.add_argument('--preprocess-fit-scope', type=str, default='train_fold_only',
                     choices=['train_fold_only', 'train_only'],
                     help='前處理 fit 範圍（防止 leakage）')
     ap.add_argument('--fail-on-leakage', action='store_true', default=True,
                     help='發現 leakage 時立即失敗')
     
-    # Database
+    # 資料庫
     ap.add_argument('--enable-db-logging', action='store_true', default=True,
                     help='啟用 PostgreSQL 記錄')
     
-    # Label strategy
+    # 標籤策略
     ap.add_argument('--label-strategy', type=str, default='hybrid',
                     choices=['absolute', 'hybrid'],
                     help='標籤定義策略')
@@ -149,15 +149,15 @@ def parse_args():
     ap.add_argument('--label-ratio-threshold', type=float, default=1.0,
                     help='Ratio threshold')
     
-    # Exclusions
+    # 排除設定
     ap.add_argument('--exclude-products', type=str, default=None,
                     help='排除的商品 ID（逗號分隔）')
     
-    # Paper mode
+    # 論文模式
     ap.add_argument('--paper-mode', action='store_true', default=True,
-                    help='論文模式：啟用所有 fail-fast checks')
+                    help='論文模式：啟用所有 fail-fast 檢查')
     
-    # Hardware optimization
+    # 硬體優化
     ap.add_argument('--use-gpu', action='store_true', default=True,
                     help='使用 GPU 加速 (XGBoost gpu_hist)')
     ap.add_argument('--n-jobs', type=int, default=16,
@@ -177,14 +177,14 @@ def load_real_data(args):
     使用真實的 data_loader 載入數據（不是模擬數據！）
     """
     print("\n" + "="*80)
-    print("📊 Loading Real Data (load_product_level_training_set)")
+    print("📊 載入真實數據 (load_product_level_training_set)")
     print("="*80)
     
     # 使用真實的 product-level data loader
     X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
         date_cutoff=args.date_cutoff,
         pipeline_version=args.pipeline_version,
-        top_n=200,  # TF-IDF top 200 features
+        top_n=200,  # TF-IDF 前 200 個特徵
         label_strategy=args.label_strategy,
         label_delta_threshold=args.label_delta_threshold,
         label_params={'ratio_threshold': args.label_ratio_threshold} if args.label_strategy == 'hybrid' else None,
@@ -192,7 +192,7 @@ def load_real_data(args):
         vocab_mode='global'
     )
     
-    print(f"✅ Loaded real data:")
+    print(f"✅ 已載入真實數據:")
     print(f"  Dense features: {X_dense_df.shape}")
     print(f"  TF-IDF features: {X_tfidf.shape if X_tfidf is not None else 'None'}")
     print(f"  Labels: {len(y)}")
@@ -206,20 +206,20 @@ def train_with_new_pipeline(args):
     使用新 pipeline 執行完整訓練流程
     """
     # ========================================================================
-    # Step 1: Initialize Run
+    # 步驟 1: 初始化運行 (Run)
     # ========================================================================
     run_id = args.run_id or make_run_id(prefix=args.feature_set)
     run_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(run_dir, exist_ok=True)
     
     print("\n" + "="*80)
-    print(f"🚀 Starting Run: {run_id}")
+    print(f"🚀 開始運行: {run_id}")
     print("="*80)
-    print(f"📁 Output directory: {run_dir}")
-    print(f"🎓 Paper mode: {args.paper_mode}")
-    print(f"🔐 Fail on leakage: {args.fail_on_leakage}")
+    print(f"📁 輸出目錄: {run_dir}")
+    print(f"🎓 論文模式: {args.paper_mode}")
+    print(f"🔐 發現洩漏時失敗: {args.fail_on_leakage}")
     
-    # Git info
+    # Git 資訊
     git_info = get_git_info()
     code_fingerprint = compute_code_fingerprint([
         'Model/train_v2.py',
@@ -229,40 +229,40 @@ def train_with_new_pipeline(args):
     ])
     
     if git_info['git_dirty']:
-        print("⚠️  Warning: Git workspace is dirty! Commit before running experiments.")
+        print("⚠️  警告: Git 工作區有未提交的更改！建議在運行實驗前提交代碼。")
     
     # ========================================================================
-    # Step 2: Load REAL Data
+    # 步驟 2: 載入真實數據
     # ========================================================================
     X_dense_df, X_tfidf, y, meta, vocab = load_real_data(args)
     
-    # Create full dataframe with product_id
+    # 創建包含 product_id 的完整 dataframe
     df_full = X_dense_df.copy()
     df_full['product_id'] = meta['product_id'].values
     df_full['y_true'] = y.values
     df_full['keyword'] = meta.get('keyword', ['unknown'] * len(y)).values
     
     # ========================================================================
-    # Step 3: Create Splits (Fixed 8:2 + K-fold CV)
+    # 步驟 3: 創建切分 (固定 8:2 + K-fold CV)
     # ========================================================================
     print("\n" + "="*80)
-    print("📋 Step 3: Creating Splits")
+    print("📋 步驟 3: 創建切分 (Splits)")
     print("="*80)
     
-    # ABLATION CONTROL: Force use of baseline splits
+    # 消融控制: 強制使用 baseline 切分
     if args.force_use_splits:
-        print(f"  ⚠️  Loading forced splits from: {args.force_use_splits}")
+        print(f"  ⚠️  從以下路徑載入強制切分: {args.force_use_splits}")
         if not os.path.exists(args.force_use_splits):
-            raise FileNotFoundError(f"Forced splits file not found: {args.force_use_splits}")
+            raise FileNotFoundError(f"找不到強制切分檔案: {args.force_use_splits}")
         
         splits_df = pd.read_parquet(args.force_use_splits)
         
-        # Copy to current run dir for archiving
+        # 複製到當前運行目錄以歸檔
         import shutil
         shutil.copy(args.force_use_splits, os.path.join(run_dir, 'splits.parquet'))
-        print(f"  ✅ Loaded {len(splits_df)} samples from forced splits")
+        print(f"  ✅ 從強制切分已載入 {len(splits_df)} 個樣本")
     else:
-        # Normal split creation
+        # 正常創建切分
         splits_df = make_splits(
             df_full,
             holdout_strategy=args.holdout_strategy,
@@ -276,10 +276,11 @@ def train_with_new_pipeline(args):
         )
     
     # ========================================================================
-    # Step 4: Compute Hashes
+    # ========================================================================
+    # 步驟 4: 計算 Hashes
     # ========================================================================
     print("\n" + "="*80)
-    print("🔐 Step 4: Computing Hashes")
+    print("🔐 步驟 4: 計算 Hashes")
     print("="*80)
     
     samples_df = splits_df.merge(df_full[['product_id', 'y_true', 'keyword']], on='product_id')
@@ -293,61 +294,62 @@ def train_with_new_pipeline(args):
     print(f"  split_hash: {split_hash}")
     
     # ========================================================================
-    # ABLATION CONTROL: Hash Verification for Locked Mode
+    # 消融控制: 鎖定模式下的 Hash 驗證
     # ========================================================================
     if args.hyperparameter_mode == 'locked':
-        print("\n  🔐 Verifying Hash Consistency (Ablation Mode)...")
+        print("\n  🔐 驗證 Hash 一致性 (消融模式)...")
         
         if not args.baseline_params_path:
-            raise ValueError("--baseline-params-path required for hyperparameter_mode=locked")
+            raise ValueError("hyperparameter_mode=locked 時必須指定 --baseline-params-path")
         
         if not os.path.exists(args.baseline_params_path):
-            raise FileNotFoundError(f"Baseline params not found: {args.baseline_params_path}")
+            raise FileNotFoundError(f"找不到 Baseline params: {args.baseline_params_path}")
         
         with open(args.baseline_params_path, 'r', encoding='utf-8') as f:
             baseline_params = json.load(f)
         
-        # Verify split_hash matches
+        # 驗證 split_hash 是否匹配
         baseline_split_hash = baseline_params.get('split_hash')
         if baseline_split_hash != split_hash:
             raise ValueError(
-                f"❌ Split hash mismatch!\n"
+                f"❌ Split hash 不匹配!\n"
                 f"  Baseline: {baseline_split_hash}\n"
-                f"  Current:  {split_hash}\n"
-                f"  → You are using different splits!\n"
-                f"  → Use --force-use-splits to load baseline splits"
+                f"  當前:     {split_hash}\n"
+                f"  → 您正在使用不同的切分!\n"
+                f"  → 使用 --force-use-splits 來載入 baseline 切分"
             )
         
-        # Verify dataset_hash matches
+        # 驗證 dataset_hash 是否匹配
         baseline_dataset_hash = baseline_params.get('dataset_hash')
         if baseline_dataset_hash != dataset_hash:
             raise ValueError(
-                f"❌ Dataset hash mismatch!\n"
+                f"❌ Dataset hash 不匹配!\n"
                 f"  Baseline: {baseline_dataset_hash}\n"
-                f"  Current:  {dataset_hash}\n"
-                f"  → Check: --date-cutoff, --label-strategy, --exclude-products\n"
-                f"  → All data loading parameters must match baseline!"
+                f"  當前:     {dataset_hash}\n"
+                f"  → 檢查: --date-cutoff, --label-strategy, --exclude-products\n"
+                f"  → 所有數據載入參數必須與 baseline 匹配!"
             )
         
-        print(f"  ✅ split_hash verified: {split_hash}")
-        print(f"  ✅ dataset_hash verified: {dataset_hash}")
-        print(f"  ✅ Ablation study consistency PASSED!")
+        print(f"  ✅ split_hash 驗證通過: {split_hash}")
+        print(f"  ✅ dataset_hash 驗證通過: {dataset_hash}")
+        print(f"  ✅ 消融研究一致性檢查通過!")
     
     # ========================================================================
-    # Step 5: Feature Engineering
+    # ========================================================================
+    # 步驟 5: 特徵工程
     # ========================================================================
     print("\n" + "="*80)
-    print("🔧 Step 5: Feature Engineering")
+    print("🔧 步驟 5: 特徵工程")
     print("="*80)
     
-    # Get feature whitelist
+    # 獲取特徵白名單
     feature_whitelist = get_feature_whitelist(args.feature_set)
     validate_feature_whitelist(feature_whitelist, mode='paper' if args.paper_mode else 'legacy')
     
-    # Filter to available features
+    # 過濾出可用特徵
     available_features = [f for f in feature_whitelist if f in df_full.columns]
     print(f"  Feature set: {args.feature_set}")
-    print(f"  Available features: {len(available_features)}/{len(feature_whitelist)}")
+    print(f"  可用特徵: {len(available_features)}/{len(feature_whitelist)}")
     
     feature_hash = compute_feature_hash(
         available_features,
@@ -359,10 +361,10 @@ def train_with_new_pipeline(args):
     print(f"  feature_hash: {feature_hash}")
     
     # ========================================================================
-    # Step 6: Imbalance Report
+    # 步驟 6: 不平衡處理報告
     # ========================================================================
     print("\n" + "="*80)
-    print("⚖️  Step 6: Imbalance Handling")
+    print("⚖️  步驟 6: 不平衡處理")
     print("="*80)
     
     y_df = samples_df[['product_id', 'y_true']]
@@ -372,19 +374,20 @@ def train_with_new_pipeline(args):
         scope=args.scale_pos_weight_scope
     )
     
-    print(f"  Scope: {args.scale_pos_weight_scope}")
-    print(f"  Mean scale_pos_weight: {imbalance_report['statistics']['mean_scale_pos_weight']:.2f}")
+    print(f"  範圍: {args.scale_pos_weight_scope}")
+    print(f"  平均 scale_pos_weight: {imbalance_report['statistics']['mean_scale_pos_weight']:.2f}")
     
     # ========================================================================
-    # Step 7: Initialize Artifact Manager & Database
+    # ========================================================================
+    # 步驟 7: 初始化 Artifact Manager 和資料庫
     # ========================================================================
     print("\n" + "="*80)
-    print("💾 Step 7: Initialize Artifact Manager")
+    print("💾 步驟 7: 初始化 Artifact Manager")
     print("="*80)
     
     manager = ArtifactManager(run_id, run_dir)
     
-    # Save config
+    # 保存配置
     config = vars(args)
     config.update({
         'git_commit': git_info['git_commit'],
@@ -397,7 +400,7 @@ def train_with_new_pipeline(args):
     })
     manager.save_config(config)
     
-    # Save basic artifacts
+    # 保存基本 artifacts
     manager.save_splits(splits_df)
     manager.save_labels(samples_df[['product_id', 'y_true']])
     manager.save_hashes({
@@ -416,7 +419,7 @@ def train_with_new_pipeline(args):
         'scaler': 'none'
     })
     
-    # Database logging
+    # 資料庫記錄
     conn = None
     if args.enable_db_logging:
         try:
@@ -446,20 +449,21 @@ def train_with_new_pipeline(args):
                 model_params={'default': True}
             )
             
-            # Upsert samples
+            # 更新樣本
             upsert_samples(conn, run_id, samples_df)
             upsert_features(conn, run_id, available_features, active=True)
             
-            print("  ✅ Database logging initialized")
+            print("  ✅ 資料庫記錄已初始化")
         except Exception as e:
-            print(f"  ⚠️  Database logging failed: {e}")
+            print(f"  ⚠️  資料庫記錄失敗: {e}")
             conn = None
     
     # ========================================================================
-    # Step 8: K-Fold Training (真實訓練，不是模擬！)
+    # ========================================================================
+    # 步驟 8: K-Fold 訓練 (真實訓練，不是模擬！)
     # ========================================================================
     print("\n" + "="*80)
-    print("🎯 Step 8: K-Fold Cross-Validation Training")
+    print("🎯 步驟 8: K-Fold 交叉驗證訓練")
     print("="*80)
     
     train_pool = samples_df[samples_df['split'] == 'train_pool']
@@ -470,26 +474,26 @@ def train_with_new_pipeline(args):
     for fold in range(args.n_folds):
         print(f"\n  Fold {fold+1}/{args.n_folds}...")
         
-        # Split data
+        # 切分數據
         train_fold_df = train_pool[train_pool['fold_id'] != fold]
         val_fold_df = train_pool[train_pool['fold_id'] == fold]
         
-        # Get features
+        # 獲取特徵
         X_train = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), available_features]
         y_train = train_fold_df['y_true'].values
         X_val = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), available_features]
         y_val = val_fold_df['y_true'].values
         
-        # Feature transformation (with leakage prevention)
+        # 特徵轉換（包含防洩漏保護）
         transformer = FeatureTransformer(
             profile=args.feature_transform_profile,
             feature_whitelist=available_features
         )
-        transformer.fit(X_train)  # Only fit on train fold!
+        transformer.fit(X_train)  # 僅在 train fold 上 fit！
         X_train_transformed = transformer.transform(X_train)
         X_val_transformed = transformer.transform(X_val)
         
-        # Leakage check
+        # 防止数据洩漏檢查
         train_fold_ids = set(train_fold_df['product_id'])
         test_ids = set(test_set['product_id'])
         
@@ -497,18 +501,18 @@ def train_with_new_pipeline(args):
             splits_df,
             current_fold=fold,
             preprocess_fit_scope=args.preprocess_fit_scope,
-            tfidf_source_ids=train_fold_ids,  # Assuming TF-IDF fit on train fold
+            tfidf_source_ids=train_fold_ids,  # 假設 TF-IDF fit 在 train fold 上
             scaler_source_ids=train_fold_ids,
             fail_fast=args.fail_on_leakage
         )
         
-        if fold == 0:  # Save leakage report for first fold
+        if fold == 0:  # 為第一個 fold 保存洩漏報告
             manager.save_leakage_checks(leakage_report)
         
-        # Train model with scale_pos_weight
+        # 使用 scale_pos_weight 訓練模型
         spw = imbalance_report['folds'][f'fold_{fold}']['scale_pos_weight']
         
-        # Build XGBoost params
+        # 建立 XGBoost 參數
         xgb_params = {
             'max_depth': 6,
             'learning_rate': 0.1,
@@ -518,7 +522,7 @@ def train_with_new_pipeline(args):
             'eval_metric': 'logloss'
         }
         
-        # Hardware optimization (i9-13900K + RTX 4080)
+        # 硬體優化 (i9-13900K + RTX 4080)
         if args.use_gpu:
             xgb_params.update({
                 'tree_method': 'gpu_hist',
@@ -533,11 +537,11 @@ def train_with_new_pipeline(args):
         
         model.fit(X_train_transformed, y_train)
         
-        # Predict on validation fold
+        # 在驗證集上預測
         y_prob = model.predict_proba(X_val_transformed)[:, 1]
         y_pred = (y_prob > 0.5).astype(int)
         
-        # Store OOF predictions
+        # 儲存 OOF 預測
         val_preds = val_fold_df[['product_id', 'y_true']].copy()
         val_preds['fold_id'] = fold
         val_preds['y_prob'] = y_prob
@@ -547,19 +551,19 @@ def train_with_new_pipeline(args):
         
         all_oof_preds.append(val_preds)
         
-        # Metrics
+        # 指標
         auc = roc_auc_score(y_val, y_prob)
         f1 = f1_score(y_val, y_pred)
         print(f"    AUC: {auc:.4f}, F1: {f1:.4f}")
     
     # ========================================================================
-    # Step 9: Final Model Training & Test Evaluation
+    # 步驟 9: 最終模型訓練與測試評估
     # ========================================================================
     print("\n" + "="*80)
-    print("🔬 Step 9: Final Model Training & Test Evaluation")
+    print("🔬 步驟 9: 最終模型訓練與測試評估")
     print("="*80)
     
-    # Train on full train_pool
+    # 在完整的 train_pool 上訓練
     X_train_full = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), available_features]
     y_train_full = train_pool['y_true'].values
     
@@ -567,12 +571,12 @@ def train_with_new_pipeline(args):
     transformer_final.fit(X_train_full)
     X_train_full_transformed = transformer_final.transform(X_train_full)
     
-    # Use train_pool scope for final model
+    # 對於最終模型使用 train_pool scope
     n_pos = (y_train_full == 1).sum()
     n_neg = (y_train_full == 0).sum()
     spw_final = n_neg / n_pos if n_pos > 0 else 1.0
     
-    # Build final model params
+    # 建立最終模型參數
     xgb_params_final = {
         'max_depth': 6,
         'learning_rate': 0.1,
@@ -610,50 +614,51 @@ def train_with_new_pipeline(args):
     test_preds['fold_id'] = -1
     
     # ========================================================================
-    # Step 10: Save Predictions & Metrics
+    # ========================================================================
+    # 步驟 10: 保存預測結果與指標
     # ========================================================================
     print("\n" + "="*80)
-    print("📊 Step 10: Save Predictions & Metrics")
+    print("📊 步驟 10: 保存預測結果與指標")
     print("="*80)
     
-    # Concatenate OOF predictions
+    # 合併 OOF 預測
     oof_preds_df = pd.concat(all_oof_preds, ignore_index=True)
     
-    # Save predictions
+    # 保存預測
     manager.save_predictions_oof(oof_preds_df)
     manager.save_predictions_test(test_preds)
     
     # ========================================================================
-    # ABLATION CONTROL: Threshold Locking
+    # 消融控制: 鎖定閾值
     # ========================================================================
     if args.threshold_mode == 'locked':
         if not args.threshold_path:
-            raise ValueError("--threshold-path required for threshold_mode=locked")
+            raise ValueError("threshold_mode=locked 時必須指定 --threshold-path")
         
         if not os.path.exists(args.threshold_path):
-            raise FileNotFoundError(f"Threshold file not found: {args.threshold_path}")
+            raise FileNotFoundError(f"找不到閾值檔案: {args.threshold_path}")
         
         with open(args.threshold_path, 'r', encoding='utf-8') as f:
             baseline_threshold_info = json.load(f)
         
         chosen_threshold = baseline_threshold_info['value']
-        print(f"\n  🔒 Using locked threshold: {chosen_threshold:.4f} (from baseline)")
+        print(f"\n  🔒 使用鎖定閾值: {chosen_threshold:.4f} (來自 baseline)")
     elif args.threshold_mode == 'tuned':
-        # TODO: Implement threshold tuning on OOF predictions
-        # For now, use simple fixed threshold
+        # TODO: 實現 OOF 預測的閾值調整
+        # 目前使用簡單的固定閾值
         chosen_threshold = 0.5
-        print(f"\n  ⚙️  Threshold tuning not yet implemented, using 0.5")
+        print(f"\n  ⚙️  閾值調整尚未實現, 使用 0.5")
     else:  # fixed
         chosen_threshold = 0.5
-        print(f"\n  📌 Using fixed threshold: {chosen_threshold}")
+        print(f"\n  📌 使用固定閾值: {chosen_threshold}")
     
-    # Re-apply threshold to predictions
+    # 重新應用閾值進行預測
     oof_preds_df['y_pred'] = (oof_preds_df['y_prob'] > chosen_threshold).astype(int)
     oof_preds_df['threshold'] = chosen_threshold
     test_preds['y_pred'] = (test_preds['y_prob'] > chosen_threshold).astype(int)
     test_preds['threshold'] = chosen_threshold
     
-    # Compute metrics
+    # 計算指標
     oof_auc = roc_auc_score(oof_preds_df['y_true'], oof_preds_df['y_prob'])
     oof_f1 = f1_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
     test_auc = roc_auc_score(test_preds['y_true'], test_preds['y_prob'])
@@ -661,7 +666,7 @@ def train_with_new_pipeline(args):
     
     metrics = {
         'oof_aggregate': {
-            'auc': {'mean': oof_auc, 'std': 0.0},  # TODO: compute per-fold std
+            'auc': {'mean': oof_auc, 'std': 0.0},  # TODO: 計算 per-fold std
             'f1': {'mean': oof_f1, 'std': 0.0}
         },
         'oof_global': {
@@ -689,7 +694,7 @@ def train_with_new_pipeline(args):
     print(f"  OOF AUC: {oof_auc:.4f}, F1: {oof_f1:.4f}")
     print(f"  Test AUC: {test_auc:.4f}, F1: {test_f1:.4f}")
     
-    # Database logging
+    # 資料庫記錄
     if conn:
         try:
             upsert_predictions(conn, run_id, oof_preds_df)
@@ -706,31 +711,31 @@ def train_with_new_pipeline(args):
                 conclusion='Training completed successfully'
             )
             conn.close()
-            print("  ✅ Database updated")
+            print("  ✅ 資料庫更新完成")
         except Exception as e:
-            print(f"  ⚠️  Database update failed: {e}")
+            print(f"  ⚠️  資料庫更新失敗: {e}")
     
     # ========================================================================
-    # Step 11: Verify Artifacts
+    # 步驟 11: 驗證 Artifacts
     # ========================================================================
     print("\n" + "="*80)
-    print("✅ Step 11: Verify Artifacts")
+    print("✅ 步驟 11: 驗證 Artifacts")
     print("="*80)
     
     verification = manager.verify_mandatory_artifacts()
-    print(f"  Generated: {verification['generated_count']}/{verification['mandatory_count']}")
+    print(f"  已生成: {verification['generated_count']}/{verification['mandatory_count']}")
     
     if not verification['all_present']:
-        print(f"  ⚠️  Missing: {verification['missing']}")
+        print(f"  ⚠️  缺失: {verification['missing']}")
     
     manager.save_artifact_summary()
     
     # ========================================================================
-    # ABLATION CONTROL: Save Baseline Best Params (if baseline + tuning)
+    # 消融控制: 保存 Baseline Best Params (如果是 baseline + tuning)
     # ========================================================================
     if args.feature_set == 'baseline' and args.hyperparameter_mode == 'tuning':
         print("\n" + "="*80)
-        print("💾 Saving Baseline Best Params for Ablation Study")
+        print("💾 保存消融研究用的 Baseline Best Params")
         print("="*80)
         
         baseline_params = {
@@ -740,13 +745,13 @@ def train_with_new_pipeline(args):
             'imbalance_mode': args.imbalance_mode,
             'scale_pos_weight_scope': args.scale_pos_weight_scope,
             'threshold_mode': args.threshold_mode,
-            'cv_metric': 'auc',  # Primary metric for comparison
-            'tuning_trials': 1,  # TODO: Implement actual hyperparameter tuning
+            'cv_metric': 'auc',  # 主要比較指標
+            'tuning_trials': 1,  # TODO: 實現實際的超參數調整
             'best_params': {
                 'max_depth': 6,
                 'learning_rate': 0.1,
                 'n_estimators': 100
-                # TODO: Replace with actual tuned params when tuning implemented
+                # TODO: 實現調整後替換為實際參數
             },
             'ablation_instructions': {
                 'usage': 'Use these params for all feature variants',
@@ -763,17 +768,17 @@ def train_with_new_pipeline(args):
         }
         
         save_baseline_best_params(run_dir, baseline_params)
-        print(f"  ✅ Saved baseline_best_params.json")
-        print(f"  ✅ Use this for ablation study variants")
+        print(f"  ✅ 已保存 baseline_best_params.json")
+        print(f"  ✅ 請在消融研究變體中使用此文件")
     
     # ========================================================================
-    # Final Summary
+    # 最終摘要
     # ========================================================================
     print("\n" + "="*80)
-    print("🎉 Training Complete!")
+    print("🎉 訓練完成！")
     print("="*80)
     print(f"  Run ID: {run_id}")
-    print(f"  Output: {run_dir}")
+    print(f"  輸出: {run_dir}")
     print(f"  OOF AUC: {oof_auc:.4f}")
     print(f"  Test AUC: {test_auc:.4f}")
     print(f"  split_hash: {split_hash}")
