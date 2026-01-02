@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 feature_transformer.py
-Feature Engineering Pipeline with Leakage Prevention
+特徵工程流水線與數據洩漏防止 (Feature Engineering Pipeline with Leakage Prevention)
 
 實現規格參考：implementation_plan.md
 - Phase 2: Feature Transform Profiles (phaseA/phaseB)
@@ -51,18 +51,18 @@ TRANSFORM_PROFILES = {
 
 class FeatureTransformer:
     """
-    Feature Engineering Pipeline with Leakage Prevention
+    特徵工程流水線與數據洩漏防止
     
     規格：implementation_plan.md #2.1-2.5
     
     支援功能：
     - Imputation (median/zero/none)
     - Clipping (p99/p995/none)
-    - Log Transform
+    - Log Transform (對數轉換)
     - Scaling (standard/robust/none)
-    - Outlier Reporting
+    - Outlier Reporting (異常值報告)
     
-    Leakage Prevention:
+    數據洩漏防止 (Leakage Prevention):
     - 所有 fit 操作只在 train fold 上執行
     - transform 可應用到 train/val/test
     """
@@ -86,7 +86,7 @@ class FeatureTransformer:
         
         # 載入 profile 配置
         if profile not in TRANSFORM_PROFILES:
-            raise ValueError(f"Unknown profile: {profile}")
+            raise ValueError(f"未知的 profile: {profile}")
         
         self.config = TRANSFORM_PROFILES[profile].copy()
         
@@ -126,7 +126,7 @@ class FeatureTransformer:
         
         X_work = X[feature_names].copy()
         
-        print(f"[FeatureTransformer] Fitting on {len(X_work)} samples, {len(feature_names)} features")
+        print(f"[FeatureTransformer] 正在 fit {len(X_work)} 個樣本, {len(feature_names)} 個特徵")
         print(f"  Profile: {self.profile}")
         print(f"  Config: {self.config}")
         
@@ -139,14 +139,14 @@ class FeatureTransformer:
         # Step 3: Log Transform (確定要轉換的特徵)
         self._fit_log_transform(X_work)
         
-        # Apply log transform for scaler fitting
+        # 應用 log transform 以進行 scaler fitting
         X_work = self._transform_log(X_work)
         
         # Step 4: Scaler (在 log transform 之後 fit)
         self._fit_scaler(X_work)
         
         self.fitted_ = True
-        print(f"[FeatureTransformer] Fit completed ✅")
+        print(f"[FeatureTransformer] Fit 完成 ✅")
         
         return self
     
@@ -161,7 +161,7 @@ class FeatureTransformer:
             Transformed 特徵
         """
         if not self.fitted_:
-            raise ValueError("FeatureTransformer must be fitted before transform")
+            raise ValueError("FeatureTransformer 必須先進行 fit 才能 transform")
         
         # 過濾 whitelist
         feature_names = self.feature_names_
@@ -185,7 +185,7 @@ class FeatureTransformer:
         return X_work
     
     def fit_transform(self, X: pd.DataFrame, feature_names: Optional[List[str]] = None) -> pd.DataFrame:
-        """Fit and transform in one step"""
+        """Fit 和 transform 一步完成"""
         return self.fit(X, feature_names).transform(X)
     
     # =========================================================================
@@ -199,7 +199,7 @@ class FeatureTransformer:
         if strategy == 'none':
             return
         
-        print(f"  [Imputation] Strategy: {strategy}")
+        print(f"  [Imputation] 策略: {strategy}")
         
         for col in X.columns:
             if X[col].isna().any():
@@ -208,7 +208,7 @@ class FeatureTransformer:
                 elif strategy == 'zero':
                     self.impute_values_[col] = 0
                 else:
-                    raise ValueError(f"Unknown impute strategy: {strategy}")
+                    raise ValueError(f"未知的 impute 策略: {strategy}")
                 
                 print(f"    {col}: {self.impute_values_[col]:.4f}")
     
@@ -257,7 +257,7 @@ class FeatureTransformer:
         
         if clip_profile != 'none':
             print(f"  [Clipping] Profile: {clip_profile}")
-            print(f"    Learned bounds for {len(self.clip_bounds_)} features")
+            print(f"    已學習 {len(self.clip_bounds_)} 個特徵的 bounds")
     
     def _transform_clipping(self, X: pd.DataFrame) -> pd.DataFrame:
         """應用 clipping"""
@@ -283,7 +283,7 @@ class FeatureTransformer:
         self.log_transform_features_ = [f for f in log_features if f in X.columns]
         
         if self.log_transform_features_:
-            print(f"  [Log Transform] Features: {self.log_transform_features_}")
+            print(f"  [Log Transform] 特徵: {self.log_transform_features_}")
     
     def _transform_log(self, X: pd.DataFrame) -> pd.DataFrame:
         """應用 log transform"""
@@ -320,7 +320,7 @@ class FeatureTransformer:
             raise ValueError(f"Unknown scaler: {scaler_type}")
         
         self.scaler_.fit(X[numeric_cols])
-        print(f"  [Scaler] Type: {scaler_type}, Features: {len(numeric_cols)}")
+        print(f"  [Scaler] 類型: {scaler_type}, 特徵數: {len(numeric_cols)}")
     
     def _transform_scaler(self, X: pd.DataFrame) -> pd.DataFrame:
         """應用 scaler"""
@@ -368,7 +368,7 @@ class FeatureTransformer:
         if hasattr(self, 'outlier_report_'):
             self.outlier_report_.to_csv(f'{output_dir}/outlier_report.csv', index=False)
         
-        print(f"[FeatureTransformer] Saved to {output_dir} ✅")
+        print(f"[FeatureTransformer] 已保存至 {output_dir} ✅")
     
     @classmethod
     def load(cls, input_dir: str) -> 'FeatureTransformer':
@@ -404,13 +404,13 @@ class FeatureTransformer:
         
         transformer.fitted_ = True
         
-        print(f"[FeatureTransformer] Loaded from {input_dir} ✅")
+        print(f"[FeatureTransformer] 已從 {input_dir} 載入 ✅")
         return transformer
 
 
 if __name__ == "__main__":
     # 簡單測試
-    print("feature_transformer.py loaded successfully")
+    print("feature_transformer.py 加載成功")
     
     # 創建模擬數據測試
     np.random.seed(42)

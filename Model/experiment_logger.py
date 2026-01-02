@@ -2,6 +2,7 @@
 """
 experiment_logger.py
 實驗資料庫記錄工具：寫入 experiment_runs, experiment_samples, experiment_predictions 等表
+(Experiment Database Logger: Writes to experiment_runs, experiment_samples, experiment_predictions, etc.)
 
 實現規格參考：implementation_plan.md Phase 5
 """
@@ -39,7 +40,7 @@ def get_db_connection():
         db_config = DatabaseConfig()
         return db_config.get_connection()
     except Exception as e:
-        raise RuntimeError(f"Failed to connect to database: {e}")
+        raise RuntimeError(f"無法連接至資料庫: {e}")
 
 
 # =============================================================================
@@ -114,7 +115,7 @@ def insert_run_start(
             ),
         )
     conn.commit()
-    print(f"[Experiment Logger] Run {run_id} started (status=running)")
+    print(f"[Experiment Logger] Run {run_id} 已啟動 (status=running)")
 
 
 def update_run_finish(
@@ -159,7 +160,7 @@ def update_run_finish(
             ),
         )
     conn.commit()
-    print(f"[Experiment Logger] Run {run_id} finished (status={status})")
+    print(f"[Experiment Logger] Run {run_id} 已結束 (status={status})")
 
 
 # =============================================================================
@@ -217,7 +218,7 @@ def upsert_samples(conn, run_id: str, samples_df: pd.DataFrame) -> None:
             page_size=5000,
         )
     conn.commit()
-    print(f"[Experiment Logger] Inserted {len(rows)} samples for run {run_id}")
+    print(f"[Experiment Logger] 已插入 {len(rows)} 個樣本 (run {run_id})")
 
 
 def upsert_predictions(conn, run_id: str, preds_df: pd.DataFrame) -> None:
@@ -263,7 +264,7 @@ def upsert_predictions(conn, run_id: str, preds_df: pd.DataFrame) -> None:
             page_size=5000,
         )
     conn.commit()
-    print(f"[Experiment Logger] Inserted {len(rows)} predictions for run {run_id}")
+    print(f"[Experiment Logger] 已插入 {len(rows)} 條預測 (run {run_id})")
 
 
 # =============================================================================
@@ -302,7 +303,7 @@ def upsert_features(
             page_size=5000,
         )
     conn.commit()
-    print(f"[Experiment Logger] Inserted {len(rows)} features for run {run_id}")
+    print(f"[Experiment Logger] 已插入 {len(rows)} 個特徵 (run {run_id})")
 
 
 def upsert_artifact(
@@ -349,12 +350,12 @@ def make_run_id(prefix: str = "") -> str:
 
 
 if __name__ == "__main__":
-    print("experiment_logger.py loaded successfully")
+    print("experiment_logger.py 加載成功")
     
     # Test database connection
     try:
         conn = get_db_connection()
-        print("✅ Database connection successful")
+        print("✅ 資料庫連接成功")
         conn.close()
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        print(f"❌ 資料庫連接失敗: {e}")

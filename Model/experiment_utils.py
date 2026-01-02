@@ -53,7 +53,7 @@ def make_splits(
         df: 必須包含 product_id, y_true 欄位（以及 keyword/category 若使用 group）
         holdout_strategy: 'stratified' (by y_true) | 'group' | 'none'
         cv_strategy: 'stratified_kfold' | 'group_kfold'
-        group_key: 'keyword' | 'category' (required for group strategies)
+        group_key: 'keyword' | 'category' (必要若使用 group strategies)
         test_size: Test set 比例（預設 0.2）
         n_folds: CV fold 數量（預設 10）
         random_seed: 隨機種子
@@ -61,7 +61,7 @@ def make_splits(
         force_resplit: 是否強制重新生成 splits
     
     Returns:
-        DataFrame with columns: product_id, split ('train_pool'/'test'), fold_id (0-9 or -1)
+        DataFrame 包含欄位: product_id, split ('train_pool'/'test'), fold_id (0-9 or -1)
     """
     # 優先序規則：若檔案存在且不強制重生成，則讀取
     if save_splits_path and os.path.exists(save_splits_path) and not force_resplit:
@@ -75,14 +75,14 @@ def make_splits(
     required_cols = ['product_id', 'y_true']
     if holdout_strategy == 'group' or cv_strategy == 'group_kfold':
         if group_key is None:
-            raise ValueError("group_key is required for group-based strategies")
+            raise ValueError("基於群組的策略需要 group_key")
         required_cols.append(group_key)
     
     for col in required_cols:
         if col not in df.columns:
-            raise ValueError(f"Missing required column: {col}")
+            raise ValueError(f"缺少必要欄位: {col}")
     
-    # Initialize splits dataframe
+    # 初始化 splits dataframe
     df_work = df[required_cols].copy()
     n_total = len(df_work)
     n_test = int(n_total * test_size)
@@ -105,7 +105,7 @@ def make_splits(
         test_ids = df_work.sample(n=n_test, random_state=random_seed)['product_id'].tolist()
     
     else:
-        raise ValueError(f"Unknown holdout_strategy: {holdout_strategy}")
+        raise ValueError(f"未知的 holdout_strategy: {holdout_strategy}")
     
     # 分配 split
     df_work['split'] = 'train_pool'
@@ -126,10 +126,10 @@ def make_splits(
         fold_splits = gkf.split(df_train, df_train['y_true'], groups=df_train[group_key])
     
     else:
-        raise ValueError(f"Unknown cv_strategy: {cv_strategy}")
+        raise ValueError(f"未知的 cv_strategy: {cv_strategy}")
     
     # 分配 fold_id
-    df_work['fold_id'] = -1  # Default: test set
+    df_work['fold_id'] = -1  # 預設: test set
     for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         product_ids_in_fold = df_train.iloc[val_idx]['product_id'].tolist()
         df_work.loc[df_work['product_id'].isin(product_ids_in_fold), 'fold_id'] = fold_idx
@@ -137,7 +137,7 @@ def make_splits(
     # 對 train_pool 中未分配到 fold 的樣本（理論上不應發生）
     unassigned = df_work[(df_work['split'] == 'train_pool') & (df_work['fold_id'] == -1)]
     if len(unassigned) > 0:
-        warnings.warn(f"{len(unassigned)} train_pool samples not assigned to any fold")
+        warnings.warn(f"{len(unassigned)} 個 train_pool 樣本未分配到任何 fold")
         # 隨機分配
         for pid in unassigned['product_id']:
             df_work.loc[df_work['product_id'] == pid, 'fold_id'] = np.random.randint(0, n_folds)
@@ -150,7 +150,7 @@ def make_splits(
     test_ids_set = set(df_work[df_work['split'] == 'test']['product_id'])
     overlap = train_ids & test_ids_set
     if overlap:
-        raise ValueError(f"Leakage detected: {len(overlap)} products in both train and test!")
+        raise ValueError(f"檢測到數據洩漏: {len(overlap)} 個商品同時出現在 train 和 test 中!")
     
     # 只保留必要欄位
     splits_df = df_work[['product_id', 'split', 'fold_id']].copy()
@@ -159,7 +159,7 @@ def make_splits(
     if save_splits_path:
         os.makedirs(os.path.dirname(save_splits_path), exist_ok=True)
         splits_df.to_parquet(save_splits_path, index=False)
-        print(f"[Split Manager] Splits saved to: {save_splits_path}")
+        print(f"[Split Manager] Splits 已保存至: {save_splits_path}")
     
     return splits_df
 
@@ -177,7 +177,7 @@ def _stratified_sample(df: pd.DataFrame, stratify_col: str, n_sample: int, seed:
 
 
 def _group_sample(df: pd.DataFrame, group_col: str, n_sample: int, seed: int) -> List:
-    """Group-based sampling: 整個 group 分配到 test"""
+    """基於群組的抽樣 (Group-based sampling): 整個 group 分配到 test"""
     np.random.seed(seed)
     groups = df[group_col].unique()
     np.random.shuffle(groups)
@@ -214,7 +214,7 @@ def compute_dataset_hash(samples_df: pd.DataFrame) -> str:
         final_samples = samples_df.copy()
     
     if len(final_samples) == 0:
-        warnings.warn("No included samples for dataset_hash computation!")
+        warnings.warn("用於 dataset_hash 計算的樣本數為 0！")
         return "EMPTY_DATASET"
     
     # 只用 product_id + y_true（不含 keyword）
@@ -289,17 +289,17 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     Returns:
         允許的特徵名稱列表
     
-    Important: Feature sets are CUMULATIVE (逐層累加)
-    - baseline: 基础统计特征
-    - +physical: baseline + 运动学特征 (含 quality_driven_momentum)
-    - +semantic: +physical + 语义特征
-    - +psych: +semantic + 心理层特征
+    重要: Feature sets 是 CUMULATIVE (逐層累加的)
+    - baseline: 基礎統計特徵
+    - +physical: baseline + 運動學特徵 (含 quality_driven_momentum)
+    - +semantic: +physical + 語義特徵
+    - +psych: +semantic + 心理層特徵
     
-    Note: quality_driven_momentum 需要 category_fit_score，
-          但在消融实验中归类为 physical layer (复合动量)
+    注意: quality_driven_momentum 需要 category_fit_score，
+          但在消融實驗中歸類為 physical layer (複合動量)
     """
-    # Forbidden features (NEVER include these)
-    # These should be filtered out before calling FeatureTransformer
+    # 禁止特徵 (永遠不包含這些)
+    # 這些應在調用 FeatureTransformer 前被過濾掉
     FORBIDDEN = ['product_id', 'y_true', 'fold_id', 'split', 'keyword']
     
     # Baseline features (基礎特徵)
@@ -312,22 +312,22 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     ]
     
     # Physical features (動力學特徵)
-    # Note: quality_driven_momentum 虽然使用 category_fit_score，
-    #       但在消融实验中归类为 physical layer
+    # Note: quality_driven_momentum 雖然使用 category_fit_score，
+    #       但在消融實驗中歸類為 physical layer
     physical = [
         'kin_v_1', 'kin_v_2', 'kin_v_3',
         'kin_acc_abs', 'kin_acc_rel',
         'kin_jerk_abs',
         'early_bird_momentum', 
         'quality_driven_momentum',  # = kin_acc_abs × category_fit_score
-        'category_fit_score'  # Required for quality_driven_momentum
+        'category_fit_score'  # quality_driven_momentum 所需
     ]
     
     # Semantic features (語義特徵)
     semantic = [
         'bert_arousal', 'bert_novelty', 'bert_repurchase',
         'bert_negative', 'bert_advertisement'
-        # Note: category_fit_score already in physical layer
+        # Note: category_fit_score 已經在 physical layer 中
     ]
     
     # Psychological features (心理學特徵)
@@ -346,8 +346,7 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     elif feature_set == '+psych':
         return baseline + physical + semantic + psych
     else:
-        raise ValueError(f"Unknown feature_set: {feature_set}")
-
+        raise ValueError(f"未知的 feature_set: {feature_set}")
 
 
 def validate_feature_whitelist(
@@ -361,7 +360,7 @@ def validate_feature_whitelist(
     
     Args:
         feature_names: 要驗證的特徵名稱列表
-        mode: 'paper' (fail-fast) | 'legacy' (warning only)
+        mode: 'paper' (fail-fast) | 'legacy' (僅警告)
     
     Raises:
         ValueError: paper mode 下發現禁止特徵時
@@ -369,7 +368,7 @@ def validate_feature_whitelist(
     forbidden = set(feature_names) & set(FORBIDDEN_FEATURES)
     
     if forbidden:
-        msg = f"Forbidden features detected: {forbidden}"
+        msg = f"檢測到禁止特徵: {forbidden}"
         if mode == 'paper':
             raise ValueError(f"[FAIL-FAST] {msg}")
         else:
@@ -401,7 +400,7 @@ def get_git_info() -> Dict[str, Any]:
             'git_dirty': is_dirty
         }
     except Exception as e:
-        warnings.warn(f"Failed to get git info: {e}")
+        warnings.warn(f"無法獲取 git 資訊: {e}")
         return {
             'git_commit': 'UNKNOWN',
             'git_branch': 'UNKNOWN',
@@ -477,8 +476,8 @@ def generate_samples_metadata(samples_df: pd.DataFrame) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     # 簡單測試
-    print("experiment_utils.py loaded successfully")
+    print("experiment_utils.py 加載成功")
     
     # Test git info
     git_info = get_git_info()
-    print(f"Git info: {git_info}")
+    print(f"Git 資訊: {git_info}")

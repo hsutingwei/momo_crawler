@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 leakage_prevention.py
-Data Leakage Prevention Utilities
+數據洩漏防止工具 (Data Leakage Prevention Utilities)
 
 實現規格參考：implementation_plan.md
-- Phase 3: TF-IDF Strict Isolation
-- Phase 3: Automated Leakage Checks (Fail-Fast)
+- Phase 3: TF-IDF Strict Isolation (TF-IDF 嚴格隔離)
+- Phase 3: Automated Leakage Checks (Fail-Fast) (自動化洩漏檢查)
 """
 
 import json
@@ -51,7 +51,7 @@ def verify_tfidf_isolation(
     }
     
     if not result['passed']:
-        result['error'] = f"❌ LEAKAGE: {len(leaked_ids)} test products in TF-IDF vocab source!"
+        result['error'] = f"❌ 洩漏: {len(leaked_ids)} 個測試集商品混入 TF-IDF vocab 來源!"
         result['leaked_sample'] = list(leaked_ids)[:5]
     
     return result
@@ -80,7 +80,7 @@ def verify_clip_bounds_isolation(
             'check_name': 'clip_bounds_isolation',
             'passed': True,
             'skipped': True,
-            'details': 'No clipping performed (skip check)'
+            'details': '未執行 clipping (跳過檢查)'
         }
     
     leaked_ids = clip_source_product_ids & test_product_ids
@@ -95,7 +95,7 @@ def verify_clip_bounds_isolation(
     }
     
     if not result['passed']:
-        result['error'] = f"❌ LEAKAGE: {len(leaked_ids)} test products in clip source!"
+        result['error'] = f"❌ 洩漏: {len(leaked_ids)} 個測試集商品混入 clip 來源!"
         result['leaked_sample'] = list(leaked_ids)[:5]
     
     return result
@@ -116,7 +116,7 @@ def verify_impute_values_isolation(
             'check_name': 'impute_values_isolation',
             'passed': True,
             'skipped': True,
-            'details': 'No imputation performed (skip check)'
+            'details': '未執行 imputation (跳過檢查)'
         }
     
     leaked_ids = impute_source_product_ids & test_product_ids
@@ -131,7 +131,7 @@ def verify_impute_values_isolation(
     }
     
     if not result['passed']:
-        result['error'] = f"❌ LEAKAGE: {len(leaked_ids)} test products in imputation source!"
+        result['error'] = f"❌ 洩漏: {len(leaked_ids)} 個測試集商品混入 imputation 來源!"
         result['leaked_sample'] = list(leaked_ids)[:5]
     
     return result
@@ -152,7 +152,7 @@ def verify_scaler_isolation(
             'check_name': 'scaler_isolation',
             'passed': True,
             'skipped': True,
-            'details': 'No scaling performed (skip check)'
+            'details': '未執行 scaling (跳過檢查)'
         }
     
     leaked_ids = scaler_source_product_ids & test_product_ids
@@ -167,7 +167,7 @@ def verify_scaler_isolation(
     }
     
     if not result['passed']:
-        result['error'] = f"❌ LEAKAGE: {len(leaked_ids)} test products in scaler source!"
+        result['error'] = f"❌ 洩漏: {len(leaked_ids)} 個測試集商品混入 scaler 來源!"
         result['leaked_sample'] = list(leaked_ids)[:5]
     
     return result
@@ -194,7 +194,7 @@ def verify_no_test_in_train_fold(
     }
     
     if not result['passed']:
-        result['error'] = f"❌ CRITICAL LEAKAGE: {len(leaked_ids)} test products in train fold!"
+        result['error'] = f"❌ 嚴重洩漏 (CRITICAL LEAKAGE): {len(leaked_ids)} 個測試集商品混入 train fold!"
         result['leaked_sample'] = list(leaked_ids)[:10]  # 顯示更多（這是嚴重錯誤）
     
     return result
@@ -295,7 +295,7 @@ def verify_no_leakage(
     if not all_passed and fail_fast:
         error_msgs = [check['error'] for check in failed_checks if 'error' in check]
         raise ValueError(
-            f"❌ LEAKAGE DETECTED! {len(failed_checks)} check(s) failed:\n" +
+            f"❌ 檢測到數據洩漏 (LEAKAGE DETECTED)! {len(failed_checks)} 個檢查失敗:\n" +
             "\n".join(error_msgs)
         )
     
@@ -308,9 +308,9 @@ def save_leakage_report(report: Dict[str, Any], output_path: str) -> None:
         json.dump(report, f, ensure_ascii=False, indent=2)
     
     if report['all_passed']:
-        print(f"✅ Leakage check PASSED - Report saved to {output_path}")
+        print(f"✅ Leakage 檢查通過 - 報告已保存至 {output_path}")
     else:
-        print(f"❌ Leakage check FAILED - Report saved to {output_path}")
+        print(f"❌ Leakage 檢查失敗 - 報告已保存至 {output_path}")
 
 
 # =============================================================================
@@ -354,7 +354,7 @@ def generate_tfidf_metadata(
 
 
 if __name__ == "__main__":
-    print("leakage_prevention.py loaded successfully")
+    print("leakage_prevention.py 加載成功")
     
     # 簡單測試
     np.random.seed(42)
@@ -369,10 +369,10 @@ if __name__ == "__main__":
     train_ids = set(splits_df[splits_df['split'] == 'train_pool']['product_id'])
     test_ids = set(splits_df[splits_df['split'] == 'test']['product_id'])
     
-    print(f"\nTest data: {len(train_ids)} train, {len(test_ids)} test")
+    print(f"\n測試數據: {len(train_ids)} train, {len(test_ids)} test")
     
     # 測試：正常情況（無 leakage）
-    print("\n[Test 1] No leakage (should pass)")
+    print("\n[測試 1] 無洩漏 (應通過)")
     train_fold_0 = set(splits_df[
         (splits_df['split'] == 'train_pool') & (splits_df['fold_id'] != 0)
     ]['product_id'])
@@ -384,10 +384,10 @@ if __name__ == "__main__":
         tfidf_source_ids=train_fold_0,
         fail_fast=False
     )
-    print(f"Result: {'✅ PASSED' if report['all_passed'] else '❌ FAILED'}")
+    print(f"結果: {'✅ 通過' if report['all_passed'] else '❌ 失敗'}")
     
     # 測試：異常情況（有 leakage）
-    print("\n[Test 2] With leakage (should fail)")
+    print("\n[測試 2] 有洩漏 (應失敗)")
     leaked_source = train_fold_0 | set(list(test_ids)[:5])  # 混入 5 個 test IDs
     
     try:
@@ -399,4 +399,4 @@ if __name__ == "__main__":
             fail_fast=True  # 應該拋出錯誤
         )
     except ValueError as e:
-        print(f"✅ Correctly caught leakage: {str(e)[:100]}...")
+        print(f"✅ 正確捕捉到洩漏: {str(e)[:100]}...")

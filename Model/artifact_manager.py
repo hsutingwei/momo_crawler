@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 artifact_manager.py
-Artifact Generation & Management
+實驗產物生成與管理 (Artifact Generation & Management)
 
 實現規格參考：implementation_plan.md
-- Phase 5: Artifacts & Reproducibility (15+ artifacts per run)
-- Specification #5: Mandatory Artifacts, OOF/Test Separation
+- Phase 5: Artifacts & Reproducibility (每次 run 生成 15+ artifacts)
+- Specification #5: Mandatory Artifacts, OOF/Test Separation (強制產物, OOF/Test 分離)
 """
 
 import os
@@ -292,7 +292,7 @@ def save_baseline_best_params(
     with open(output_path, 'w') as f:
         json.dump(params, f, indent=2)
     
-    print(f"✅ Baseline params saved to {output_path}")
+    print(f"✅ Baseline 參數已保存至 {output_path}")
 
 
 def load_and_verify_baseline_params(
@@ -320,18 +320,18 @@ def load_and_verify_baseline_params(
     
     if mismatches and fail_on_mismatch:
         raise ValueError(
-            f"❌ Hash mismatch! Cannot use locked params:\n" +
+            f"❌ Hash 不匹配 (Hash Mismatch)! 無法使用鎖定的參數:\n" +
             "\n".join(mismatches)
         )
     
     if mismatches:
-        print(f"⚠️  Warning: Hash mismatches detected:\n" + "\n".join(mismatches))
+        print(f"⚠️  警告: 檢測到 Hash 不匹配:\n" + "\n".join(mismatches))
     
     return params
 
 
 if __name__ == "__main__":
-    print("artifact_manager.py loaded successfully")
+    print("artifact_manager.py 加載成功")
     
     # 測試
     import tempfile
@@ -365,7 +365,7 @@ if __name__ == "__main__":
         
         # Save summary
         summary_path = manager.save_artifact_summary()
-        print(f"\n✅ Summary saved to {summary_path}")
+        print(f"\n✅ Summary 已保存至 {summary_path}")
         
     finally:
         shutil.rmtree(test_dir)

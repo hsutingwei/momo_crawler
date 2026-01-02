@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 imbalance_handling.py
-Class Imbalance Handling Utilities
+類別不平衡處理工具 (Class Imbalance Handling Utilities)
 
 實現規格參考：implementation_plan.md
-- Phase 4: Consistent Scale Pos Weight
-- Specification #21: scale_pos_weight Calculation Basis
+- Phase 4: Consistent Scale Pos Weight (一致的 Scale Pos Weight)
+- Specification #21: scale_pos_weight Calculation Basis (計算基礎)
 """
 
 import json
@@ -39,7 +39,7 @@ def compute_scale_pos_weight(
     n_neg = (y == 0).sum()
     
     if n_pos == 0:
-        raise ValueError(f"No positive samples in {scope}! Cannot compute scale_pos_weight.")
+        raise ValueError(f"在 {scope} 中沒有正樣本! 無法計算 scale_pos_weight。")
     
     scale_pos_weight = n_neg / n_pos
     
@@ -87,7 +87,7 @@ def compute_scale_pos_weight_per_fold(
             n_neg = (fold_data['y_true'] == 0).sum()
             
             if n_pos == 0:
-                raise ValueError(f"Fold {fold}: No positive samples!")
+                raise ValueError(f"Fold {fold}: 沒有正樣本!")
             
             spw = n_neg / n_pos
             
@@ -106,7 +106,7 @@ def compute_scale_pos_weight_per_fold(
         n_neg = (train_pool_data['y_true'] == 0).sum()
         
         if n_pos == 0:
-            raise ValueError("train_pool: No positive samples!")
+            raise ValueError("train_pool: 沒有正樣本!")
         
         spw = n_neg / n_pos
         
@@ -117,11 +117,11 @@ def compute_scale_pos_weight_per_fold(
                 'n_neg': int(n_neg),
                 'scale_pos_weight': float(spw),
                 'positive_rate': float(n_pos / (n_pos + n_neg)),
-                'note': 'Same value for all folds (train_pool scope)'
+                'note': '所有 folds 使用相同值 (train_pool scope)'
             }
     
     else:
-        raise ValueError(f"Unknown scope: {scope}")
+        raise ValueError(f"未知的 scope: {scope}")
     
     # 計算統計
     spw_values = [f['scale_pos_weight'] for f in imbalance_report['folds'].values()]
@@ -143,7 +143,7 @@ def save_imbalance_report(
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     
-    print(f"✅ Imbalance report saved to {output_path}")
+    print(f"✅ Imbalance report 已保存至 {output_path}")
     
     # 輸出摘要
     stats = report['statistics']
@@ -172,28 +172,28 @@ def verify_imbalance_consistency(
     """
     # 檢查 scope 是否相同
     if report1['scope'] != report2['scope']:
-        print(f"❌ Scope mismatch: {report1['scope']} vs {report2['scope']}")
+        print(f"❌ Scope 不匹配: {report1['scope']} vs {report2['scope']}")
         return False
     
     # 檢查 n_folds 是否相同
     if report1['n_folds'] != report2['n_folds']:
-        print(f"❌ n_folds mismatch: {report1['n_folds']} vs {report2['n_folds']}")
+        print(f"❌ n_folds 不匹配: {report1['n_folds']} vs {report2['n_folds']}")
         return False
     
     # 檢查每個 fold 的 scale_pos_weight 是否一致
     for fold_key in report1['folds']:
         if fold_key not in report2['folds']:
-            print(f"❌ Fold missing in report2: {fold_key}")
+            print(f"❌ Fold 在 report2 中缺失: {fold_key}")
             return False
         
         spw1 = report1['folds'][fold_key]['scale_pos_weight']
         spw2 = report2['folds'][fold_key]['scale_pos_weight']
         
         if abs(spw1 - spw2) > tolerance:
-            print(f"❌ scale_pos_weight mismatch in {fold_key}: {spw1:.4f} vs {spw2:.4f}")
+            print(f"❌ {fold_key} 的 scale_pos_weight 不匹配: {spw1:.4f} vs {spw2:.4f}")
             return False
     
-    print("✅ Imbalance handling is consistent across runs")
+    print("✅ Run 之間的 Imbalance handling 一致")
     return True
 
 
@@ -219,16 +219,16 @@ def get_imbalance_config(
         return {
             'mode': 'scale_pos_weight',
             'scope': scope,
-            'description': f'Use scale_pos_weight computed from {scope}'
+            'description': f'使用從 {scope} 計算的 scale_pos_weight'
         }
     elif imbalance_mode == 'none':
         return {
             'mode': 'none',
             'scope': None,
-            'description': 'No imbalance handling'
+            'description': '無不平衡處理'
         }
     else:
-        raise ValueError(f"Unknown imbalance_mode: {imbalance_mode}")
+        raise ValueError(f"未知的 imbalance_mode: {imbalance_mode}")
 
 
 # =============================================================================
@@ -258,7 +258,7 @@ def prepare_xgboost_params(
 
 
 if __name__ == "__main__":
-    print("imbalance_handling.py loaded successfully")
+    print("imbalance_handling.py 加載成功")
     
     # 簡單測試
     np.random.seed(42)
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     print(f"\n模擬數據: {n_samples} samples, ~5% positive")
     
     # Test fold_train scope
-    print("\n[Test 1] fold_train scope:")
+    print("\n[測試 1] fold_train scope:")
     report1 = compute_scale_pos_weight_per_fold(
         splits_df, y_df, n_folds=10, scope='fold_train'
     )
@@ -288,19 +288,19 @@ if __name__ == "__main__":
     print(f"  Std: {report1['statistics']['std_scale_pos_weight']:.4f}")
     
     # Test train_pool scope
-    print("\n[Test 2] train_pool scope:")
+    print("\n[測試 2] train_pool scope:")
     report2 = compute_scale_pos_weight_per_fold(
         splits_df, y_df, n_folds=10, scope='train_pool'
     )
     print(f"  Mean scale_pos_weight: {report2['statistics']['mean_scale_pos_weight']:.2f}")
     print(f"  Std: {report2['statistics']['std_scale_pos_weight']:.4f}")
-    print(f"  (Should be 0 for train_pool scope)")
+    print(f"  (對於 train_pool scope 應該為 0)")
     
     # Test consistency verification
-    print("\n[Test 3] Consistency verification:")
+    print("\n[測試 3] 一致性驗證:")
     # Same report should be consistent
     is_consistent = verify_imbalance_consistency(report2, report2)
     
     # Different scopes should NOT be consistent
-    print("\n[Test 4] Different scopes (should fail):")
+    print("\n[測試 4] 不同 scopes (應失敗):")
     is_consistent = verify_imbalance_consistency(report1, report2)
