@@ -155,6 +155,14 @@ def parse_args():
     ap.add_argument('--paper-mode', action='store_true', default=True,
                     help='論文模式：啟用所有 fail-fast checks')
     
+    # Hardware optimization
+    ap.add_argument('--use-gpu', action='store_true', default=True,
+                    help='使用 GPU 加速 (XGBoost gpu_hist)')
+    ap.add_argument('--n-jobs', type=int, default=16,
+                    help='XGBoost 訓練線程數（建議為 CPU 線程數的一半）')
+    ap.add_argument('--gpu-id', type=int, default=0,
+                    help='GPU 設備 ID')
+    
     return ap.parse_args()
 
 
@@ -439,14 +447,28 @@ def train_with_new_pipeline(args):
         # Train model with scale_pos_weight
         spw = imbalance_report['folds'][f'fold_{fold}']['scale_pos_weight']
         
-        model = xgb.XGBClassifier(
-            max_depth=6,
-            learning_rate=0.1,
-            n_estimators=100,
-            scale_pos_weight=spw if args.imbalance_mode == 'scale_pos_weight' else 1.0,
-            random_state=args.random_seed,
-            eval_metric='logloss'
-        )
+        # Build XGBoost params
+        xgb_params = {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 100,
+            'scale_pos_weight': spw if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+            'random_state': args.random_seed,
+            'eval_metric': 'logloss'
+        }
+        
+        # Hardware optimization (i9-13900K + RTX 4080)
+        if args.use_gpu:
+            xgb_params.update({
+                'tree_method': 'gpu_hist',
+                'gpu_id': args.gpu_id,
+                'predictor': 'gpu_predictor',
+                'max_bin': 256  # GPU optimal
+            })
+        
+        xgb_params['n_jobs'] = args.n_jobs
+        
+        model = xgb.XGBClassifier(**xgb_params)
         
         model.fit(X_train_transformed, y_train)
         
@@ -489,13 +511,26 @@ def train_with_new_pipeline(args):
     n_neg = (y_train_full == 0).sum()
     spw_final = n_neg / n_pos if n_pos > 0 else 1.0
     
-    model_final = xgb.XGBClassifier(
-        max_depth=6,
-        learning_rate=0.1,
-        n_estimators=100,
-        scale_pos_weight=spw_final if args.imbalance_mode == 'scale_pos_weight' else 1.0,
-        random_state=args.random_seed
-    )
+    # Build final model params
+    xgb_params_final = {
+        'max_depth': 6,
+        'learning_rate': 0.1,
+        'n_estimators': 100,
+        'scale_pos_weight': spw_final if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+        'random_state': args.random_seed
+    }
+    
+    if args.use_gpu:
+        xgb_params_final.update({
+            'tree_method': 'gpu_hist',
+            'gpu_id': args.gpu_id,
+            'predictor': 'gpu_predictor',
+            'max_bin': 256
+        })
+    
+    xgb_params_final['n_jobs'] = args.n_jobs
+    
+    model_final = xgb.XGBClassifier(**xgb_params_final)
     
     model_final.fit(X_train_full_transformed, y_train_full)
     
