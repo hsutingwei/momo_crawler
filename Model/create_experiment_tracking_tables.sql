@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS experiment_samples (
   keyword           TEXT,
 
   y_true            SMALLINT NOT NULL CHECK (y_true IN (0, 1)),
-  split             TEXT NOT NULL CHECK (split IN ('train','val','test')),
+  split             TEXT NOT NULL CHECK (split IN ('train_pool','test')),
   fold              INT NOT NULL DEFAULT -1,
 
   -- filter / inclusion semantics
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS experiment_predictions (
   y_prob            DOUBLE PRECISION NOT NULL,
   y_pred            SMALLINT NOT NULL CHECK (y_pred IN (0, 1)),
 
-  split             TEXT NOT NULL CHECK (split IN ('train','val','test')),
+  split             TEXT NOT NULL CHECK (split IN ('train_pool','test')),
   fold              INT NOT NULL DEFAULT -1,
   threshold         DOUBLE PRECISION NOT NULL DEFAULT 0.5,
 
