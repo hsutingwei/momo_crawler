@@ -874,7 +874,7 @@ def train_with_new_pipeline(args):
     print("="*80)
     print(f"  Run ID: {run_id}")
     print(f"  輸出: {run_dir}")
-    print(f"  OOF AUC: {oof_auc:.4f}")
+    print(f"  OOF Global AUC: {oof_global_auc:.4f}")
     print(f"  Test AUC: {test_auc:.4f}")
     print(f"  split_hash: {split_hash}")
     print(f"  Artifacts: {verification['generated_count']}")
