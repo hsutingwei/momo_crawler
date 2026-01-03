@@ -712,8 +712,7 @@ def train_with_new_pipeline(args):
     fold_aucs = [m['auc'] for m in fold_metrics]
     fold_f1s = [m['f1'] for m in fold_metrics]
     
-    import numpy as np
-    
+
     # 計算全局 OOF 指標 (拼接所有 fold)
     oof_global_auc = roc_auc_score(oof_preds_df['y_true'], oof_preds_df['y_prob'])
     oof_global_f1 = f1_score(oof_preds_df['y_true'], oof_preds_df['y_pred'])
