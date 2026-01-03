@@ -100,10 +100,14 @@ def view_run(run_path):
             avg_prob = df['y_prob'].mean()
             pred_pos = df['y_pred'].sum()
             
+            # 顯示 threshold (Single Source of Truth)
+            threshold_val = df['threshold'].iloc[0] if 'threshold' in df.columns else 'N/A'
+            
             print(f"  - 樣本數: {n_samples}")
             print(f"  - 真實正樣本: {n_pos} ({pos_rate:.2%})")
             print(f"  - 平均預測機率: {avg_prob:.4f}")
-            print(f"  - 預測正樣本數 (Threshold): {pred_pos}")
+            print(f"  - Threshold: {threshold_val}")
+            print(f"  - 預測正樣本數: {pred_pos}")
             
             print(f"\n  📝 [預測樣本預覽]")
             print(df[['product_id', 'y_true', 'y_prob', 'y_pred']].head(5).to_string(index=False))
