@@ -834,7 +834,11 @@ def train_with_new_pipeline(args):
             'created_at': datetime.now().isoformat()
         }
         
-        save_baseline_best_params(run_dir, baseline_params)
+        # 直接保存文件
+        baseline_params_path = os.path.join(run_dir, 'baseline_best_params.json')
+        with open(baseline_params_path, 'w') as f:
+            json.dump(baseline_params, f, indent=2)
+        
         print(f"  ✅ 已保存 baseline_best_params.json")
         print(f"  ✅ 請在消融研究變體中使用此文件")
     
