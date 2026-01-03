@@ -496,6 +496,7 @@ def train_with_new_pipeline(args):
     
     all_oof_preds = []
     fold_metrics = []  # 儲存每個 fold 的指標
+    all_leakage_reports = []  # 儲存每個 fold 的洩漏檢查結果
     
     for fold in range(args.n_folds):
         print(f"\n  Fold {fold+1}/{args.n_folds}...")
@@ -532,8 +533,8 @@ def train_with_new_pipeline(args):
             fail_fast=args.fail_on_leakage
         )
         
-        if fold == 0:  # 為第一個 fold 保存洩漏報告
-            manager.save_leakage_checks(leakage_report)
+        # 收集每個 fold 的洩漏報告
+        all_leakage_reports.append(leakage_report)
         
         # 使用 scale_pos_weight 訓練模型
         spw = imbalance_report['folds'][f'fold_{fold}']['scale_pos_weight']
@@ -585,13 +586,35 @@ def train_with_new_pipeline(args):
         val_preds = val_fold_df[['product_id', 'y_true']].copy()
         val_preds['fold_id'] = fold
         val_preds['y_prob'] = y_prob
-        val_preds['y_pred'] = y_pred
-        val_preds['threshold'] = 0.5
+        val_preds['y_pred'] = y_pred  # 暫時，會在 threshold tuning 後更新
+        val_preds['threshold'] = 0.5  # 暫時，會在 threshold tuning 後更新
         val_preds['split'] = 'train_pool'
         
         all_oof_preds.append(val_preds)
         
         print(f"    AUC: {fold_auc:.4f}, F1: {fold_f1:.4f}")
+    
+    # ========================================================================
+    # 保存所有 Folds 的洩漏檢查報告
+    # ========================================================================
+    aggregated_leakage_report = {
+        'all_passed': all(r['all_passed'] for r in all_leakage_reports),
+        'total_folds': len(all_leakage_reports),
+        'preprocess_fit_scope': args.preprocess_fit_scope,
+        'folds': []
+    }
+    for i, report in enumerate(all_leakage_reports):
+        fold_report = {
+            'fold': i,
+            'passed': report['all_passed'],
+            'total_checks': report['total_checks'],
+            'passed_checks': report['passed_checks'],
+            'failed_checks': report['failed_checks'],
+            'checks': report['checks']
+        }
+        aggregated_leakage_report['folds'].append(fold_report)
+    
+    manager.save_leakage_checks(aggregated_leakage_report)
     
     # ========================================================================
     # 步驟 9: 最終模型訓練與測試評估
@@ -645,8 +668,7 @@ def train_with_new_pipeline(args):
     
     test_preds = test_set[['product_id', 'y_true']].copy()
     test_preds['y_prob'] = y_test_prob
-    test_preds['y_pred'] = y_test_pred
-    test_preds['threshold'] = 0.5
+    # threshold 和 y_pred 將在 threshold tuning 後設定
     test_preds['split'] = 'test'
     test_preds['fold_id'] = -1
     
@@ -661,9 +683,7 @@ def train_with_new_pipeline(args):
     # 合併 OOF 預測
     oof_preds_df = pd.concat(all_oof_preds, ignore_index=True)
     
-    # 保存預測
-    manager.save_predictions_oof(oof_preds_df)
-    manager.save_predictions_test(test_preds)
+    # 預測將在 threshold tuning 後保存
     
     # ========================================================================
     # 消融控制: 鎖定閾值
@@ -707,6 +727,10 @@ def train_with_new_pipeline(args):
     oof_preds_df['threshold'] = chosen_threshold
     test_preds['y_pred'] = (test_preds['y_prob'] > chosen_threshold).astype(int)
     test_preds['threshold'] = chosen_threshold
+    
+    # 現在保存預測（使用正確的 threshold）
+    manager.save_predictions_oof(oof_preds_df)
+    manager.save_predictions_test(test_preds)
     
     # 計算 Per-Fold 統計量
     fold_aucs = [m['auc'] for m in fold_metrics]
