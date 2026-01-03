@@ -324,17 +324,22 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     ]
     
     # Semantic features (語義特徵)
+    # Note: Column names in database/data_loader are bert_*_mean
     semantic = [
-        'bert_arousal', 'bert_novelty', 'bert_repurchase',
-        'bert_negative', 'bert_advertisement'
+        'bert_arousal_mean', 'bert_novelty_mean', 'bert_repurchase_mean',
+        'bert_negative_mean', 'bert_advertisement_mean'
         # Note: category_fit_score 已經在 physical layer 中
     ]
     
     # Psychological features (心理學特徵)
+    # Note: Actual column names from data_loader.py
     psych = [
-        'diversity_tfidf', 'diversity_sbert',
-        'organic_ratio', 'burst_intensity',
-        'entropy_score'
+        'feat_entropy_tfidf', 'feat_entropy_emb',  # Information-theoretic diversity
+        'feat_temporal_burstiness',  # Temporal burst intensity
+        'feat_lexical_diversity',  # Lexical richness
+        'feat_compression_ratio', 'feat_ncd_spam',  # Spam detection via NCD
+        'momentum_tfidf', 'momentum_emb',  # Dual momentum (TF-IDF vs SBERT)
+        'spam_risk_score'  # Composite spam risk
     ]
     
     if feature_set == 'baseline':
