@@ -184,8 +184,6 @@ def load_real_data(args):
     X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
         date_cutoff=args.date_cutoff,
         pipeline_version=args.pipeline_version,
-        date_cutoff=args.date_cutoff,
-        pipeline_version=args.pipeline_version,
         top_n=args.tfidf_dim,  # TF-IDF 特徵維度 (configurable)
         label_strategy=args.label_strategy,
         label_delta_threshold=args.label_delta_threshold,
