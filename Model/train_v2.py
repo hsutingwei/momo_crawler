@@ -256,6 +256,8 @@ def train_with_new_pipeline(args):
         df_full['doc_text'] = pd.Series([''] * len(y), index=df_full.index)
     
     # CRITICAL: Create indexed version for guaranteed X-y alignment
+    if df_full['product_id'].duplicated().any():
+        raise ValueError("Duplicate product_ids found in training set! This will cause X-y misalignment.")
     df_full_idx = df_full.set_index('product_id', drop=False)
     
     # ========================================================================
@@ -445,7 +447,7 @@ def train_with_new_pipeline(args):
         'feature_hash': feature_hash,
         'tfidf_params': {
             'max_features': args.tfidf_dim,
-            'token_pattern': r'\S+',
+            'tokenizer': 'str.split',  # Replaced regex with explicit split
             'lowercase': False,
             'method': 'sklearn_fold_wise',  # vs 'db_tfidf_scores'
             'source': 'comment_tokens',
@@ -548,6 +550,10 @@ def train_with_new_pipeline(args):
         train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
         val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
         
+        # ========== TF-IDF fit on train_fold ONLY ==========
+        train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
+        val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
+        
         # Sanity check: empty document ratio
         train_empty_ratio = (train_docs == '').mean()
         val_empty_ratio = (val_docs == '').mean()
@@ -555,14 +561,24 @@ def train_with_new_pipeline(args):
         if train_empty_ratio > 0.5:
             print(f"    ⚠️  Warning: >50% of train documents are empty!")
         
+        # Use str.split for pre-tokenized text (safer than regex)
         vectorizer = TfidfVectorizer(
             max_features=args.tfidf_dim, 
-            token_pattern=r'\S+',  # Already tokenized (space-separated)
-            lowercase=False  # Tokens already processed
+            tokenizer=str.split,
+            preprocessor=None,
+            token_pattern=None,
+            lowercase=False
         )
         X_train_tfidf = vectorizer.fit_transform(train_docs)
         X_val_tfidf = vectorizer.transform(val_docs)
         
+        # Sanity check: Non-zero elements
+        train_nnz = X_train_tfidf.nnz
+        train_density = train_nnz / (X_train_tfidf.shape[0] * X_train_tfidf.shape[1]) if X_train_tfidf.shape[1] > 0 else 0
+        print(f"    [Fold {fold}] TF-IDF density: {train_density:.2%} (nnz={train_nnz})")
+        if train_density < 0.001:
+             print(f"    ⚠️  Warning: TF-IDF matrix is extremely sparse (<0.1%)!")
+             
         print(f"    [Fold {fold}] TF-IDF vocab size: {len(vectorizer.vocabulary_)}")
         print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
         
@@ -722,11 +738,18 @@ def train_with_new_pipeline(args):
     
     final_vectorizer = TfidfVectorizer(
         max_features=args.tfidf_dim, 
-        token_pattern=r'\S+',
+        tokenizer=str.split,
+        preprocessor=None,
+        token_pattern=None,
         lowercase=False
     )
     X_train_full_tfidf = final_vectorizer.fit_transform(train_pool_docs)
     X_test_tfidf = final_vectorizer.transform(test_docs)
+    
+    # Sanity check: Non-zero elements
+    train_pool_nnz = X_train_full_tfidf.nnz
+    train_pool_density = train_pool_nnz / (X_train_full_tfidf.shape[0] * X_train_full_tfidf.shape[1]) if X_train_full_tfidf.shape[1] > 0 else 0
+    print(f"  [Final] TF-IDF density: {train_pool_density:.2%} (nnz={train_pool_nnz})")
     
     print(f"  [Final] TF-IDF vocab size: {len(final_vectorizer.vocabulary_)}")
     print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
