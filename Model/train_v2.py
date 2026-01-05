@@ -550,10 +550,6 @@ def train_with_new_pipeline(args):
         train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
         val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
         
-        # ========== TF-IDF fit on train_fold ONLY ==========
-        train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
-        val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
-        
         # Sanity check: empty document ratio
         train_empty_ratio = (train_docs == '').mean()
         val_empty_ratio = (val_docs == '').mean()
@@ -602,6 +598,15 @@ def train_with_new_pipeline(args):
         transformer.fit(X_train_dense)  # 僅在 train fold 上 fit！
         X_train_dense_transformed = transformer.transform(X_train_dense)
         X_val_dense_transformed = transformer.transform(X_val_dense)
+        
+        # ========== CRITICAL: Alignment Validation ==========
+        # These MUST all have the same row count
+        if not (len(train_ids) == X_train_dense.shape[0] == X_train_tfidf.shape[0] == len(y_train)):
+            raise ValueError(f"Fold {fold} ALIGNMENT ERROR: train_ids={len(train_ids)}, "
+                           f"X_dense={X_train_dense.shape[0]}, X_tfidf={X_train_tfidf.shape[0]}, y={len(y_train)}")
+        if not (len(val_ids) == X_val_dense.shape[0] == X_val_tfidf.shape[0] == len(y_val)):
+            raise ValueError(f"Fold {fold} ALIGNMENT ERROR: val_ids={len(val_ids)}, "
+                           f"X_val_dense={X_val_dense.shape[0]}, X_val_tfidf={X_val_tfidf.shape[0]}, y_val={len(y_val)}")
         
         # ========== CRITICAL: Merge dense + TF-IDF ==========
         X_train_merged = hstack([csr_matrix(X_train_dense_transformed), X_train_tfidf])
