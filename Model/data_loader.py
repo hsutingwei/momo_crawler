@@ -376,6 +376,7 @@ def load_product_level_training_set(
     label_strategy: str = "absolute",
     label_params: Optional[Dict] = None,
     return_meta_details: bool = False,
+    skip_tfidf_matrix: bool = False,  # Set True to skip DB-based TF-IDF matrix construction
 ) -> Tuple[pd.DataFrame, csr_matrix, pd.Series, pd.DataFrame, List[str]]:
     """
     ?? (X_dense_df, X_tfidf_sparse, y_series, meta_df, vocab)
@@ -708,6 +709,17 @@ def load_product_level_training_set(
             -- Concatenate recent comments (last 90 days) to form a "product document"
             STRING_AGG(comment_text, ' ') FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS aggregated_comments,
             
+            -- Tokenized Document Text for TF-IDF (from comment_tokens)
+            -- Join with comment_tokens and aggregate tokens in order
+            (
+                SELECT STRING_AGG(ct.token, ' ' ORDER BY ct.token_order)
+                FROM comment_tokens ct
+                JOIN product_comments pc ON pc.comment_id = ct.comment_id
+                WHERE pc.product_id = pre_comments.product_id
+                  AND pc.capture_time <= %(cutoff)s::timestamp
+                  AND pc.comment_date >= %(cutoff)s::date - INTERVAL '90 days'
+            ) AS doc_text_tokenized,
+            
             -- Recent Comments JSON for Diversity & Burstiness Features
             -- Get last 20 comments with text and date
             (
@@ -819,6 +831,7 @@ def load_product_level_training_set(
           COALESCE(m.kin_v_2, 0) AS kin_v_2,
           COALESCE(m.kin_v_3, 0) AS kin_v_3,
           m.aggregated_comments,
+          COALESCE(m.doc_text_tokenized, '') AS doc_text_tokenized,
           m.recent_comments_json,
           COALESCE(s.had_any_change_pre,0) AS had_any_change_pre,
           COALESCE(s.num_increases_pre,0) AS num_increases_pre
@@ -1210,11 +1223,16 @@ def load_product_level_training_set(
         if min_comments > 0 and "comment_count_pre" in df.columns:
             df = df[df["comment_count_pre"] >= min_comments]
 
-        vocab = fetch_top_terms(conn,
-                                top_n=top_n,
-                                pipeline_version=pipeline_version,
-                                product_id=None,
-                                min_len=2, max_len=4)
+        # Skip DB-based TF-IDF matrix construction if using fold-wise sklearn TF-IDF
+        if skip_tfidf_matrix:
+            vocab = []
+            X_tfidf = csr_matrix((len(df), 0), dtype=np.int8)
+        else:
+            vocab = fetch_top_terms(conn,
+                                    top_n=top_n,
+                                    pipeline_version=pipeline_version,
+                                    product_id=None,
+                                    min_len=2, max_len=4)
 
         if vocab:
             cutoff_where = "" if label_mode == "fixed_window" else "WHERE pc.capture_time <= %(cutoff)s::timestamp"
@@ -1236,12 +1254,12 @@ def load_product_level_training_set(
             pairs = pd.DataFrame(columns=["product_id", "token"])
 
         if label_mode == "fixed_window" and "representative_batch_time" in y_df.columns:
-            meta = df[["product_id", "name", "keyword", "aggregated_comments"]].copy()
+            meta = df[["product_id", "name", "keyword", "aggregated_comments", "doc_text_tokenized"]].copy()
             meta = meta.merge(y_df[["product_id", "representative_batch_time"]], on="product_id", how="left")
             if "representative_batch_time" in meta.columns:
                 meta["representative_batch_time"] = pd.to_datetime(meta["representative_batch_time"], utc=True)
         else:
-            meta = df[["product_id", "name", "keyword", "aggregated_comments"]].copy()
+            meta = df[["product_id", "name", "keyword", "aggregated_comments", "doc_text_tokenized"]].copy()
             
         if return_meta_details:
             if "max_raw_delta" in y_df.columns:

@@ -34,12 +34,14 @@ import argparse
 import warnings
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import hashlib
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import hstack, csr_matrix
+import joblib  # For serializing vectorizer
 import xgboost as xgb
 
 # 匯入數據加載器
@@ -191,7 +193,8 @@ def load_real_data(args):
         label_delta_threshold=args.label_delta_threshold,
         label_params={'ratio_threshold': args.label_ratio_threshold} if args.label_strategy == 'hybrid' else None,
         exclude_products=[int(p) for p in args.exclude_products.split(',')] if args.exclude_products else None,
-        vocab_mode='global'
+        vocab_mode='global',
+        skip_tfidf_matrix=True  # Use fold-wise sklearn TF-IDF instead of DB-based matrix
     )
     
     print(f"✅ 已載入真實數據:")
@@ -243,7 +246,17 @@ def train_with_new_pipeline(args):
     df_full['product_id'] = meta['product_id'].values
     df_full['y_true'] = y.values
     df_full['keyword'] = meta.get('keyword', ['unknown'] * len(y)).values
-    df_full['doc_text'] = meta.get('aggregated_comments', [''] * len(y)).fillna('').values  # For fold-wise TF-IDF
+    # Extract doc_text with robust fallback
+    if 'doc_text_tokenized' in meta.columns:
+        df_full['doc_text'] = meta['doc_text_tokenized'].fillna('')
+    elif 'aggregated_comments' in meta.columns:
+        df_full['doc_text'] = meta['aggregated_comments'].fillna('')
+    else:
+        # Fallback: empty strings for all products
+        df_full['doc_text'] = pd.Series([''] * len(y), index=df_full.index)
+    
+    # CRITICAL: Create indexed version for guaranteed X-y alignment
+    df_full_idx = df_full.set_index('product_id', drop=False)
     
     # ========================================================================
     # 步驟 3: 創建切分 (固定 8:2 + K-fold CV)
@@ -429,7 +442,15 @@ def train_with_new_pipeline(args):
         'code_fingerprint': code_fingerprint,
         'dataset_hash': dataset_hash,
         'split_hash': split_hash,
-        'feature_hash': feature_hash
+        'feature_hash': feature_hash,
+        'tfidf_params': {
+            'max_features': args.tfidf_dim,
+            'token_pattern': r'\S+',
+            'lowercase': False,
+            'method': 'sklearn_fold_wise',  # vs 'db_tfidf_scores'
+            'source': 'comment_tokens',
+            'strict_a_note': 'Each fold has independent vocab (no leakage). Cross-fold feature importance not directly alignable.'
+        }
     })
     manager.save_config(config)
     
@@ -512,15 +533,27 @@ def train_with_new_pipeline(args):
         train_fold_df = train_pool[train_pool['fold_id'] != fold]
         val_fold_df = train_pool[train_pool['fold_id'] == fold]
         
-        # 獲取 dense features
-        X_train_dense = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), available_features]
-        y_train = train_fold_df['y_true'].values
-        X_val_dense = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), available_features]
-        y_val = val_fold_df['y_true'].values
+        # CRITICAL: Use index-based loc for guaranteed X-y alignment
+        train_ids = train_fold_df['product_id'].tolist()
+        val_ids = val_fold_df['product_id'].tolist()
+        
+        # 獲取 dense features (aligned by product_id index)
+        X_train_dense = df_full_idx.loc[train_ids, available_features]
+        y_train = train_fold_df.set_index('product_id').loc[train_ids, 'y_true'].values
+        
+        X_val_dense = df_full_idx.loc[val_ids, available_features]
+        y_val = val_fold_df.set_index('product_id').loc[val_ids, 'y_true'].values
         
         # ========== TF-IDF fit on train_fold ONLY ==========
-        train_docs = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), 'doc_text'].fillna('').values
-        val_docs = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), 'doc_text'].fillna('').values
+        train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
+        val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
+        
+        # Sanity check: empty document ratio
+        train_empty_ratio = (train_docs == '').mean()
+        val_empty_ratio = (val_docs == '').mean()
+        print(f"    [Fold {fold}] Empty doc ratio: Train={train_empty_ratio:.2%}, Val={val_empty_ratio:.2%}")
+        if train_empty_ratio > 0.5:
+            print(f"    ⚠️  Warning: >50% of train documents are empty!")
         
         vectorizer = TfidfVectorizer(
             max_features=args.tfidf_dim, 
@@ -532,6 +565,14 @@ def train_with_new_pipeline(args):
         
         print(f"    [Fold {fold}] TF-IDF vocab size: {len(vectorizer.vocabulary_)}")
         print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
+        
+        # Save top 50 vocab for this fold (for diagnostics)
+        if len(vectorizer.vocabulary_) > 0:
+            vocab_items = sorted(vectorizer.vocabulary_.items(), key=lambda x: x[1])
+            top_vocab = [word for word, idx in vocab_items[:50]]
+            fold_vocab_path = os.path.join(run_dir, f'tfidf_vocab_fold{fold}_top50.json')
+            with open(fold_vocab_path, 'w', encoding='utf-8') as f:
+                json.dump({'vocab_size': len(vectorizer.vocabulary_), 'top_50': top_vocab}, f, ensure_ascii=False, indent=2)
         
         # Fail-fast if TF-IDF is empty
         if X_train_tfidf.shape[1] == 0:
@@ -661,12 +702,23 @@ def train_with_new_pipeline(args):
     print("="*80)
     
     # 在完整的 train_pool 上訓練
-    X_train_full_dense = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), available_features]
-    y_train_full = train_pool['y_true'].values
+    train_pool_ids = train_pool['product_id'].tolist()
+    test_ids = test_set['product_id'].tolist()
+    
+    # Use indexed loc for guaranteed alignment
+    X_train_full_dense = df_full_idx.loc[train_pool_ids, available_features]
+    y_train_full = train_pool.set_index('product_id').loc[train_pool_ids, 'y_true'].values
     
     # ========== TF-IDF fit on full train_pool ==========
-    train_pool_docs = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), 'doc_text'].fillna('').values
-    test_docs = df_full.loc[df_full['product_id'].isin(test_set['product_id']), 'doc_text'].fillna('').values
+    train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
+    test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
+    
+    # Sanity check: empty document ratio
+    train_pool_empty_ratio = (train_pool_docs == '').mean()
+    test_empty_ratio = (test_docs == '').mean()
+    print(f"  [Final] Empty doc ratio: Train_pool={train_pool_empty_ratio:.2%}, Test={test_empty_ratio:.2%}")
+    if train_pool_empty_ratio > 0.5:
+        print(f"  ⚠️  Warning: >50% of train_pool documents are empty!")
     
     final_vectorizer = TfidfVectorizer(
         max_features=args.tfidf_dim, 
@@ -679,12 +731,33 @@ def train_with_new_pipeline(args):
     print(f"  [Final] TF-IDF vocab size: {len(final_vectorizer.vocabulary_)}")
     print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
     
+    # Save final vocab (all terms) for reproducibility
+    if len(final_vectorizer.vocabulary_) > 0:
+        final_vocab = sorted(final_vectorizer.vocabulary_.keys())
+        final_vocab_path = os.path.join(run_dir, 'tfidf_vocab_final.json')
+        
+        # Compute vocab hash for verification
+        vocab_hash = hashlib.sha256('|'.join(final_vocab).encode('utf-8')).hexdigest()[:16]
+        
+        with open(final_vocab_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'vocab_size': len(final_vocab),
+                'vocab_hash': vocab_hash,
+                'vocabulary': final_vocab
+            }, f, ensure_ascii=False, indent=2)
+        print(f"  [Final] TF-IDF vocab hash: {vocab_hash}")
+        
+        # CRITICAL: Save complete vectorizer for exact reproducibility
+        vectorizer_path = os.path.join(run_dir, 'tfidf_vectorizer_final.joblib')
+        joblib.dump(final_vectorizer, vectorizer_path)
+        print(f"  [Final] Saved complete vectorizer to: tfidf_vectorizer_final.joblib")
+    
     # Transform dense features
     transformer_final = FeatureTransformer(profile=args.feature_transform_profile, feature_whitelist=available_features)
     transformer_final.fit(X_train_full_dense)
     X_train_full_dense_transformed = transformer_final.transform(X_train_full_dense)
     
-    X_test_dense = df_full.loc[df_full['product_id'].isin(test_set['product_id']), available_features]
+    X_test_dense = df_full_idx.loc[test_ids, available_features]
     X_test_dense_transformed = transformer_final.transform(X_test_dense)
     
     # ========== Merge dense + TF-IDF ==========

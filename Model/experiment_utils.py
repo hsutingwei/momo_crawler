@@ -312,15 +312,14 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     ]
     
     # Physical features (動力學特徵)
-    # Note: quality_driven_momentum 雖然使用 category_fit_score，
-    #       但在消融實驗中歸類為 physical layer
+    # Note: category_fit_score 和 quality_driven_momentum 已移除
+    #       原因：category_fit_score 在全資料集上計算文本統計（違反嚴格 A）
+    #       可在未來實作 fold-wise category_fit_score 計算後再加回
     physical = [
         'kin_v_1', 'kin_v_2', 'kin_v_3',
         'kin_acc_abs', 'kin_acc_rel',
         'kin_jerk_abs',
-        'early_bird_momentum', 
-        'quality_driven_momentum',  # = kin_acc_abs × category_fit_score
-        'category_fit_score'  # quality_driven_momentum 所需
+        'early_bird_momentum'
     ]
     
     # Semantic features (語義特徵)
