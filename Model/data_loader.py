@@ -1236,12 +1236,12 @@ def load_product_level_training_set(
             pairs = pd.DataFrame(columns=["product_id", "token"])
 
         if label_mode == "fixed_window" and "representative_batch_time" in y_df.columns:
-            meta = df[["product_id", "name", "keyword"]].copy()
+            meta = df[["product_id", "name", "keyword", "aggregated_comments"]].copy()
             meta = meta.merge(y_df[["product_id", "representative_batch_time"]], on="product_id", how="left")
             if "representative_batch_time" in meta.columns:
                 meta["representative_batch_time"] = pd.to_datetime(meta["representative_batch_time"], utc=True)
         else:
-            meta = df[["product_id", "name", "keyword"]].copy()
+            meta = df[["product_id", "name", "keyword", "aggregated_comments"]].copy()
             
         if return_meta_details:
             if "max_raw_delta" in y_df.columns:

@@ -38,6 +38,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.sparse import hstack, csr_matrix
 import xgboost as xgb
 
 # 匯入數據加載器
@@ -241,6 +243,7 @@ def train_with_new_pipeline(args):
     df_full['product_id'] = meta['product_id'].values
     df_full['y_true'] = y.values
     df_full['keyword'] = meta.get('keyword', ['unknown'] * len(y)).values
+    df_full['doc_text'] = meta.get('aggregated_comments', [''] * len(y)).fillna('').values  # For fold-wise TF-IDF
     
     # ========================================================================
     # 步驟 3: 創建切分 (固定 8:2 + K-fold CV)
@@ -509,20 +512,50 @@ def train_with_new_pipeline(args):
         train_fold_df = train_pool[train_pool['fold_id'] != fold]
         val_fold_df = train_pool[train_pool['fold_id'] == fold]
         
-        # 獲取特徵
-        X_train = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), available_features]
+        # 獲取 dense features
+        X_train_dense = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), available_features]
         y_train = train_fold_df['y_true'].values
-        X_val = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), available_features]
+        X_val_dense = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), available_features]
         y_val = val_fold_df['y_true'].values
         
-        # 特徵轉換（包含防洩漏保護）
+        # ========== TF-IDF fit on train_fold ONLY ==========
+        train_docs = df_full.loc[df_full['product_id'].isin(train_fold_df['product_id']), 'doc_text'].fillna('').values
+        val_docs = df_full.loc[df_full['product_id'].isin(val_fold_df['product_id']), 'doc_text'].fillna('').values
+        
+        vectorizer = TfidfVectorizer(
+            max_features=args.tfidf_dim, 
+            token_pattern=r'\S+',  # Already tokenized (space-separated)
+            lowercase=False  # Tokens already processed
+        )
+        X_train_tfidf = vectorizer.fit_transform(train_docs)
+        X_val_tfidf = vectorizer.transform(val_docs)
+        
+        print(f"    [Fold {fold}] TF-IDF vocab size: {len(vectorizer.vocabulary_)}")
+        print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
+        
+        # Fail-fast if TF-IDF is empty
+        if X_train_tfidf.shape[1] == 0:
+            raise ValueError(f"Fold {fold}: TF-IDF dimension is 0! Check documents and vocab.")
+        
+        # 特徵轉換 dense features（包含防洩漏保護）
         transformer = FeatureTransformer(
             profile=args.feature_transform_profile,
             feature_whitelist=available_features
         )
-        transformer.fit(X_train)  # 僅在 train fold 上 fit！
-        X_train_transformed = transformer.transform(X_train)
-        X_val_transformed = transformer.transform(X_val)
+        transformer.fit(X_train_dense)  # 僅在 train fold 上 fit！
+        X_train_dense_transformed = transformer.transform(X_train_dense)
+        X_val_dense_transformed = transformer.transform(X_val_dense)
+        
+        # ========== CRITICAL: Merge dense + TF-IDF ==========
+        X_train_merged = hstack([csr_matrix(X_train_dense_transformed), X_train_tfidf])
+        X_val_merged = hstack([csr_matrix(X_val_dense_transformed), X_val_tfidf])
+        
+        # Sanity check
+        expected_dim = X_train_dense_transformed.shape[1] + X_train_tfidf.shape[1]
+        actual_dim = X_train_merged.shape[1]
+        print(f"    [Fold {fold}] Merged dims: Dense={X_train_dense_transformed.shape[1]} + TF-IDF={X_train_tfidf.shape[1]} = {actual_dim}")
+        if actual_dim != expected_dim:
+            raise ValueError(f"Fold {fold}: Merge failed! Expected {expected_dim}, got {actual_dim}")
         
         # 防止数据洩漏檢查
         train_fold_ids = set(train_fold_df['product_id'])
@@ -566,10 +599,10 @@ def train_with_new_pipeline(args):
         
         model = xgb.XGBClassifier(**xgb_params)
         
-        model.fit(X_train_transformed, y_train)
+        model.fit(X_train_merged, y_train)
         
         # 在驗證集上預測
-        y_prob = model.predict_proba(X_val_transformed)[:, 1]
+        y_prob = model.predict_proba(X_val_merged)[:, 1]
         y_pred = (y_prob > 0.5).astype(int)
         
         # 計算本 fold 的指標
@@ -628,12 +661,37 @@ def train_with_new_pipeline(args):
     print("="*80)
     
     # 在完整的 train_pool 上訓練
-    X_train_full = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), available_features]
+    X_train_full_dense = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), available_features]
     y_train_full = train_pool['y_true'].values
     
+    # ========== TF-IDF fit on full train_pool ==========
+    train_pool_docs = df_full.loc[df_full['product_id'].isin(train_pool['product_id']), 'doc_text'].fillna('').values
+    test_docs = df_full.loc[df_full['product_id'].isin(test_set['product_id']), 'doc_text'].fillna('').values
+    
+    final_vectorizer = TfidfVectorizer(
+        max_features=args.tfidf_dim, 
+        token_pattern=r'\S+',
+        lowercase=False
+    )
+    X_train_full_tfidf = final_vectorizer.fit_transform(train_pool_docs)
+    X_test_tfidf = final_vectorizer.transform(test_docs)
+    
+    print(f"  [Final] TF-IDF vocab size: {len(final_vectorizer.vocabulary_)}")
+    print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
+    
+    # Transform dense features
     transformer_final = FeatureTransformer(profile=args.feature_transform_profile, feature_whitelist=available_features)
-    transformer_final.fit(X_train_full)
-    X_train_full_transformed = transformer_final.transform(X_train_full)
+    transformer_final.fit(X_train_full_dense)
+    X_train_full_dense_transformed = transformer_final.transform(X_train_full_dense)
+    
+    X_test_dense = df_full.loc[df_full['product_id'].isin(test_set['product_id']), available_features]
+    X_test_dense_transformed = transformer_final.transform(X_test_dense)
+    
+    # ========== Merge dense + TF-IDF ==========
+    X_train_full_merged = hstack([csr_matrix(X_train_full_dense_transformed), X_train_full_tfidf])
+    X_test_merged = hstack([csr_matrix(X_test_dense_transformed), X_test_tfidf])
+    
+    print(f"  [Final] Merged dims: Dense={X_train_full_dense_transformed.shape[1]} + TF-IDF={X_train_full_tfidf.shape[1]} = {X_train_full_merged.shape[1]}")
     
     # 對於最終模型使用 train_pool scope
     n_pos = (y_train_full == 1).sum()
@@ -660,14 +718,10 @@ def train_with_new_pipeline(args):
     xgb_params_final['n_jobs'] = args.n_jobs
     
     model_final = xgb.XGBClassifier(**xgb_params_final)
+    model_final.fit(X_train_full_merged, y_train_full)
     
-    model_final.fit(X_train_full_transformed, y_train_full)
-    
-    # Predict on test set (只評估一次！)
-    X_test = df_full.loc[df_full['product_id'].isin(test_set['product_id']), available_features]
-    X_test_transformed = transformer_final.transform(X_test)
-    
-    y_test_prob = model_final.predict_proba(X_test_transformed)[:, 1]
+    # Predict on test set using merged features
+    y_test_prob = model_final.predict_proba(X_test_merged)[:, 1]
     y_test_pred = (y_test_prob > 0.5).astype(int)
     
     test_preds = test_set[['product_id', 'y_true']].copy()
