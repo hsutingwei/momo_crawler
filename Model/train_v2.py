@@ -165,6 +165,10 @@ def parse_args():
     ap.add_argument('--force-use-splits', type=str, default=None,
                     help='強制使用指定的 splits.parquet 路徑（確保 baseline 和 variants 使用相同 splits）')
     
+    # Feature Engineering
+    ap.add_argument('--tfidf-dim', type=int, default=200,
+                    help='TF-IDF 特徵維度 (top_n)')
+    
     return ap.parse_args()
 
 
@@ -180,7 +184,9 @@ def load_real_data(args):
     X_dense_df, X_tfidf, y, meta, vocab = load_product_level_training_set(
         date_cutoff=args.date_cutoff,
         pipeline_version=args.pipeline_version,
-        top_n=200,  # TF-IDF 前 200 個特徵
+        date_cutoff=args.date_cutoff,
+        pipeline_version=args.pipeline_version,
+        top_n=args.tfidf_dim,  # TF-IDF 特徵維度 (configurable)
         label_strategy=args.label_strategy,
         label_delta_threshold=args.label_delta_threshold,
         label_params={'ratio_threshold': args.label_ratio_threshold} if args.label_strategy == 'hybrid' else None,
