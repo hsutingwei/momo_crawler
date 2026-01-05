@@ -26,6 +26,7 @@ Thumbs.db
 *.json
 
 *.parquet
+*.joblib
 
 error_report_*.txt
 clean_decimal_report_*.csv
