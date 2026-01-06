@@ -247,8 +247,21 @@ def train_with_new_pipeline(args):
     df_full['y_true'] = y.values
     df_full['keyword'] = meta.get('keyword', ['unknown'] * len(y)).values
     # Extract doc_text with robust fallback
+    # Priority: doc_text_tokenized (pre-tokenized) > aggregated_comments (raw text)
     if 'doc_text_tokenized' in meta.columns:
-        df_full['doc_text'] = meta['doc_text_tokenized'].fillna('')
+        tokenized = meta['doc_text_tokenized'].fillna('')
+        # Fallback to aggregated_comments for rows where tokenized is empty
+        if 'aggregated_comments' in meta.columns:
+            raw = meta['aggregated_comments'].fillna('')
+            # Use tokenized where available, otherwise use raw
+            df_full['doc_text'] = tokenized.where(tokenized != '', raw)
+            # Track which source we used
+            tokenized_count = (tokenized != '').sum()
+            raw_count = ((tokenized == '') & (raw != '')).sum()
+            empty_count = ((tokenized == '') & (raw == '')).sum()
+            print(f"  [doc_text] Sources: tokenized={tokenized_count}, fallback_raw={raw_count}, empty={empty_count}")
+        else:
+            df_full['doc_text'] = tokenized
     elif 'aggregated_comments' in meta.columns:
         df_full['doc_text'] = meta['aggregated_comments'].fillna('')
     else:
@@ -557,14 +570,30 @@ def train_with_new_pipeline(args):
         if train_empty_ratio > 0.5:
             print(f"    ⚠️  Warning: >50% of train documents are empty!")
         
-        # Use str.split for pre-tokenized text (safer than regex)
-        vectorizer = TfidfVectorizer(
-            max_features=args.tfidf_dim, 
-            tokenizer=str.split,
-            preprocessor=None,
-            token_pattern=None,
-            lowercase=False
-        )
+        # Use str.split for pre-tokenized text, char n-grams for raw Chinese text
+        # Detect if text is pre-tokenized (has spaces) or raw (continuous Chinese)
+        sample_docs = [d for d in train_docs[:10] if d]
+        has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
+        
+        if has_spaces:
+            # Pre-tokenized text: use str.split
+            vectorizer = TfidfVectorizer(
+                max_features=args.tfidf_dim, 
+                tokenizer=str.split,
+                preprocessor=None,
+                token_pattern=None,
+                lowercase=False
+            )
+            print(f"    [Fold {fold}] Using tokenizer: str.split (pre-tokenized)")
+        else:
+            # Raw Chinese text: use character n-grams
+            vectorizer = TfidfVectorizer(
+                max_features=args.tfidf_dim, 
+                analyzer='char_wb',
+                ngram_range=(2, 4),
+                lowercase=False
+            )
+            print(f"    [Fold {fold}] Using tokenizer: char_wb n-grams (raw Chinese)")
         X_train_tfidf = vectorizer.fit_transform(train_docs)
         X_val_tfidf = vectorizer.transform(val_docs)
         
@@ -741,13 +770,27 @@ def train_with_new_pipeline(args):
     if train_pool_empty_ratio > 0.5:
         print(f"  ⚠️  Warning: >50% of train_pool documents are empty!")
     
-    final_vectorizer = TfidfVectorizer(
-        max_features=args.tfidf_dim, 
-        tokenizer=str.split,
-        preprocessor=None,
-        token_pattern=None,
-        lowercase=False
-    )
+    # Smart tokenizer selection (same logic as CV)
+    sample_docs = [d for d in train_pool_docs[:10] if d]
+    has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
+    
+    if has_spaces:
+        final_vectorizer = TfidfVectorizer(
+            max_features=args.tfidf_dim, 
+            tokenizer=str.split,
+            preprocessor=None,
+            token_pattern=None,
+            lowercase=False
+        )
+        print(f"  [Final] Using tokenizer: str.split (pre-tokenized)")
+    else:
+        final_vectorizer = TfidfVectorizer(
+            max_features=args.tfidf_dim, 
+            analyzer='char_wb',
+            ngram_range=(2, 4),
+            lowercase=False
+        )
+        print(f"  [Final] Using tokenizer: char_wb n-grams (raw Chinese)")
     X_train_full_tfidf = final_vectorizer.fit_transform(train_pool_docs)
     X_test_tfidf = final_vectorizer.transform(test_docs)
     
