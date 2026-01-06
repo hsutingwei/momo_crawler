@@ -705,19 +705,18 @@ def load_product_level_training_set(
             COUNT(*) FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '21 days' 
                                AND comment_date < %(cutoff)s::date - INTERVAL '14 days') AS kin_v_3,
             
-            -- Aggregated Comments for Semantic Novelty (A/B Test)
-            -- Concatenate recent comments (last 90 days) to form a "product document"
-            STRING_AGG(comment_text, ' ') FILTER (WHERE comment_date >= %(cutoff)s::date - INTERVAL '90 days') AS aggregated_comments,
+            -- Aggregated Comments for TF-IDF Fallback
+            -- Use ALL comments before cutoff (same scope as doc_text_tokenized)
+            STRING_AGG(comment_text, ' ') AS aggregated_comments,
             
             -- Tokenized Document Text for TF-IDF (from comment_tokens)
-            -- Join with comment_tokens and aggregate tokens in order
+            -- ALL comments BEFORE cutoff (no 90-day restriction for TF-IDF)
             (
                 SELECT STRING_AGG(ct.token, ' ' ORDER BY ct.token_order)
                 FROM comment_tokens ct
                 JOIN product_comments pc ON pc.comment_id = ct.comment_id
                 WHERE pc.product_id = pre_comments.product_id
                   AND pc.capture_time <= %(cutoff)s::timestamp
-                  AND pc.comment_date >= %(cutoff)s::date - INTERVAL '90 days'
             ) AS doc_text_tokenized,
             
             -- Recent Comments JSON for Diversity & Burstiness Features
