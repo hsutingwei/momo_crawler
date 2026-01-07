@@ -537,6 +537,76 @@ def train_with_new_pipeline(args):
     train_pool = samples_df[samples_df['split'] == 'train_pool']
     test_set = samples_df[samples_df['split'] == 'test']
     
+    # ========================================================================
+    # TF-IDF 2A: PREFIT ONCE on train_pool (80%), test NEVER participates in fit
+    # ========================================================================
+    print("\n  📝 TF-IDF 2A: Prefit on train_pool(80%)...")
+    
+    train_pool_ids = train_pool['product_id'].tolist()
+    test_ids = test_set['product_id'].tolist()
+    
+    # Get document texts
+    train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
+    test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
+    
+    # Empty doc ratio check
+    train_pool_empty_ratio = (train_pool_docs == '').mean()
+    test_empty_ratio = (test_docs == '').mean()
+    print(f"    TFIDF(prefit) Empty doc ratio: train_pool={train_pool_empty_ratio:.2%}, test={test_empty_ratio:.2%}")
+    
+    # Detect tokenization type
+    sample_docs = [d for d in train_pool_docs[:20] if d]
+    has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
+    
+    if has_spaces:
+        tfidf_vectorizer = TfidfVectorizer(
+            max_features=args.tfidf_dim,
+            tokenizer=str.split,
+            preprocessor=None,
+            token_pattern=None,
+            lowercase=False
+        )
+        print(f"    TFIDF(prefit) tokenizer: str.split (pre-tokenized)")
+    else:
+        tfidf_vectorizer = TfidfVectorizer(
+            max_features=args.tfidf_dim,
+            analyzer='char_wb',
+            ngram_range=(2, 4),
+            lowercase=False
+        )
+        print(f"    TFIDF(prefit) tokenizer: char_wb n-grams (raw Chinese)")
+    
+    # FIT ONLY ON TRAIN_POOL - test never sees fit!
+    tfidf_vectorizer.fit(train_pool_docs)
+    
+    # Transform both train_pool and test
+    X_tfidf_train_pool = tfidf_vectorizer.transform(train_pool_docs)
+    X_tfidf_test = tfidf_vectorizer.transform(test_docs)
+    
+    # Compute vocab hash for reproducibility
+    vocab_sorted = sorted(tfidf_vectorizer.vocabulary_.keys())
+    tfidf_vocab_hash = hashlib.sha256('|'.join(vocab_sorted).encode('utf-8')).hexdigest()[:16]
+    
+    print(f"    TFIDF(prefit) train_pool shape={X_tfidf_train_pool.shape}, nnz={X_tfidf_train_pool.nnz}")
+    print(f"    TFIDF(prefit) test shape={X_tfidf_test.shape}, nnz={X_tfidf_test.nnz}")
+    print(f"    TFIDF(prefit) vocab_size={len(tfidf_vectorizer.vocabulary_)}, vocab_hash={tfidf_vocab_hash}")
+    
+    # Save prefit vectorizer and vocab
+    vectorizer_path = os.path.join(run_dir, 'tfidf_vectorizer_trainpool.joblib')
+    joblib.dump(tfidf_vectorizer, vectorizer_path)
+    
+    vocab_path = os.path.join(run_dir, 'tfidf_vocab_trainpool.json')
+    with open(vocab_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'vocab_size': len(vocab_sorted),
+            'vocab_hash': tfidf_vocab_hash,
+            'vocabulary': vocab_sorted
+        }, f, ensure_ascii=False, indent=2)
+    print(f"    ✅ Saved: tfidf_vectorizer_trainpool.joblib, tfidf_vocab_trainpool.json")
+    
+    # Create position mapping for train_pool (product_id -> row index in X_tfidf_train_pool)
+    train_pool_pos = {pid: idx for idx, pid in enumerate(train_pool_ids)}
+    
     all_oof_preds = []
     fold_metrics = []  # 儲存每個 fold 的指標
     all_leakage_reports = []  # 儲存每個 fold 的洩漏檢查結果
@@ -559,65 +629,23 @@ def train_with_new_pipeline(args):
         X_val_dense = df_full_idx.loc[val_ids, available_features]
         y_val = val_fold_df.set_index('product_id').loc[val_ids, 'y_true'].values
         
-        # ========== TF-IDF fit on train_fold ONLY ==========
-        train_docs = df_full_idx.loc[train_ids, 'doc_text'].fillna('').values
-        val_docs = df_full_idx.loc[val_ids, 'doc_text'].fillna('').values
+        # ========== TF-IDF 2A: SLICE from prefit matrix (NO FIT in fold!) ==========
+        # Get row indices in the prefit X_tfidf_train_pool matrix
+        train_tfidf_indices = [train_pool_pos[pid] for pid in train_ids]
+        val_tfidf_indices = [train_pool_pos[pid] for pid in val_ids]
         
-        # Sanity check: empty document ratio
-        train_empty_ratio = (train_docs == '').mean()
-        val_empty_ratio = (val_docs == '').mean()
-        print(f"    [Fold {fold}] Empty doc ratio: Train={train_empty_ratio:.2%}, Val={val_empty_ratio:.2%}")
-        if train_empty_ratio > 0.5:
-            print(f"    ⚠️  Warning: >50% of train documents are empty!")
+        # Slice TF-IDF from prefit matrix
+        X_train_tfidf = X_tfidf_train_pool[train_tfidf_indices]
+        X_val_tfidf = X_tfidf_train_pool[val_tfidf_indices]
         
-        # Use str.split for pre-tokenized text, char n-grams for raw Chinese text
-        # Detect if text is pre-tokenized (has spaces) or raw (continuous Chinese)
-        sample_docs = [d for d in train_docs[:10] if d]
-        has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
-        
-        if has_spaces:
-            # Pre-tokenized text: use str.split
-            vectorizer = TfidfVectorizer(
-                max_features=args.tfidf_dim, 
-                tokenizer=str.split,
-                preprocessor=None,
-                token_pattern=None,
-                lowercase=False
-            )
-            print(f"    [Fold {fold}] Using tokenizer: str.split (pre-tokenized)")
-        else:
-            # Raw Chinese text: use character n-grams
-            vectorizer = TfidfVectorizer(
-                max_features=args.tfidf_dim, 
-                analyzer='char_wb',
-                ngram_range=(2, 4),
-                lowercase=False
-            )
-            print(f"    [Fold {fold}] Using tokenizer: char_wb n-grams (raw Chinese)")
-        X_train_tfidf = vectorizer.fit_transform(train_docs)
-        X_val_tfidf = vectorizer.transform(val_docs)
-        
-        # Sanity check: Non-zero elements
-        train_nnz = X_train_tfidf.nnz
-        train_density = train_nnz / (X_train_tfidf.shape[0] * X_train_tfidf.shape[1]) if X_train_tfidf.shape[1] > 0 else 0
-        print(f"    [Fold {fold}] TF-IDF density: {train_density:.2%} (nnz={train_nnz})")
-        if train_density < 0.001:
-             print(f"    ⚠️  Warning: TF-IDF matrix is extremely sparse (<0.1%)!")
-             
-        print(f"    [Fold {fold}] TF-IDF vocab size: {len(vectorizer.vocabulary_)}")
+        # 2A verification log
+        print(f"    [Fold {fold}] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (no fit in fold)")
+        print(f"    [Fold {fold}] TFIDF dim fixed={args.tfidf_dim}")
         print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
         
-        # Save top 50 vocab for this fold (for diagnostics)
-        if len(vectorizer.vocabulary_) > 0:
-            vocab_items = sorted(vectorizer.vocabulary_.items(), key=lambda x: x[1])
-            top_vocab = [word for word, idx in vocab_items[:50]]
-            fold_vocab_path = os.path.join(run_dir, f'tfidf_vocab_fold{fold}_top50.json')
-            with open(fold_vocab_path, 'w', encoding='utf-8') as f:
-                json.dump({'vocab_size': len(vectorizer.vocabulary_), 'top_50': top_vocab}, f, ensure_ascii=False, indent=2)
-        
-        # Fail-fast if TF-IDF is empty
-        if X_train_tfidf.shape[1] == 0:
-            raise ValueError(f"Fold {fold}: TF-IDF dimension is 0! Check documents and vocab.")
+        # Fail-fast if TF-IDF dimension mismatch
+        if X_train_tfidf.shape[1] != args.tfidf_dim:
+            raise ValueError(f"Fold {fold}: TF-IDF dimension mismatch! Expected {args.tfidf_dim}, got {X_train_tfidf.shape[1]}")
         
         # 特徵轉換 dense features（包含防洩漏保護）
         transformer = FeatureTransformer(
@@ -759,69 +787,14 @@ def train_with_new_pipeline(args):
     X_train_full_dense = df_full_idx.loc[train_pool_ids, available_features]
     y_train_full = train_pool.set_index('product_id').loc[train_pool_ids, 'y_true'].values
     
-    # ========== TF-IDF fit on full train_pool ==========
-    train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
-    test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
+    # ========== TF-IDF 2A: USE PREFIT directly (same as CV, no re-fit!) ==========
+    # X_tfidf_train_pool and X_tfidf_test were already computed in prefit stage
+    X_train_full_tfidf = X_tfidf_train_pool  # Already in correct order: train_pool_ids
+    # X_tfidf_test already exists from prefit
     
-    # Sanity check: empty document ratio
-    train_pool_empty_ratio = (train_pool_docs == '').mean()
-    test_empty_ratio = (test_docs == '').mean()
-    print(f"  [Final] Empty doc ratio: Train_pool={train_pool_empty_ratio:.2%}, Test={test_empty_ratio:.2%}")
-    if train_pool_empty_ratio > 0.5:
-        print(f"  ⚠️  Warning: >50% of train_pool documents are empty!")
-    
-    # Smart tokenizer selection (same logic as CV)
-    sample_docs = [d for d in train_pool_docs[:10] if d]
-    has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
-    
-    if has_spaces:
-        final_vectorizer = TfidfVectorizer(
-            max_features=args.tfidf_dim, 
-            tokenizer=str.split,
-            preprocessor=None,
-            token_pattern=None,
-            lowercase=False
-        )
-        print(f"  [Final] Using tokenizer: str.split (pre-tokenized)")
-    else:
-        final_vectorizer = TfidfVectorizer(
-            max_features=args.tfidf_dim, 
-            analyzer='char_wb',
-            ngram_range=(2, 4),
-            lowercase=False
-        )
-        print(f"  [Final] Using tokenizer: char_wb n-grams (raw Chinese)")
-    X_train_full_tfidf = final_vectorizer.fit_transform(train_pool_docs)
-    X_test_tfidf = final_vectorizer.transform(test_docs)
-    
-    # Sanity check: Non-zero elements
-    train_pool_nnz = X_train_full_tfidf.nnz
-    train_pool_density = train_pool_nnz / (X_train_full_tfidf.shape[0] * X_train_full_tfidf.shape[1]) if X_train_full_tfidf.shape[1] > 0 else 0
-    print(f"  [Final] TF-IDF density: {train_pool_density:.2%} (nnz={train_pool_nnz})")
-    
-    print(f"  [Final] TF-IDF vocab size: {len(final_vectorizer.vocabulary_)}")
+    print(f"  [Final] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (same as CV)")
+    print(f"  [Final] TFIDF train_pool shape={X_train_full_tfidf.shape}, test shape={X_tfidf_test.shape}")
     print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
-    
-    # Save final vocab (all terms) for reproducibility
-    if len(final_vectorizer.vocabulary_) > 0:
-        final_vocab = sorted(final_vectorizer.vocabulary_.keys())
-        final_vocab_path = os.path.join(run_dir, 'tfidf_vocab_final.json')
-        
-        # Compute vocab hash for verification
-        vocab_hash = hashlib.sha256('|'.join(final_vocab).encode('utf-8')).hexdigest()[:16]
-        
-        with open(final_vocab_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                'vocab_size': len(final_vocab),
-                'vocab_hash': vocab_hash,
-                'vocabulary': final_vocab
-            }, f, ensure_ascii=False, indent=2)
-        print(f"  [Final] TF-IDF vocab hash: {vocab_hash}")
-        
-        # CRITICAL: Save complete vectorizer for exact reproducibility
-        vectorizer_path = os.path.join(run_dir, 'tfidf_vectorizer_final.joblib')
-        joblib.dump(final_vectorizer, vectorizer_path)
-        print(f"  [Final] Saved complete vectorizer to: tfidf_vectorizer_final.joblib")
     
     # Transform dense features
     transformer_final = FeatureTransformer(profile=args.feature_transform_profile, feature_whitelist=available_features)
@@ -833,7 +806,7 @@ def train_with_new_pipeline(args):
     
     # ========== Merge dense + TF-IDF ==========
     X_train_full_merged = hstack([csr_matrix(X_train_full_dense_transformed), X_train_full_tfidf])
-    X_test_merged = hstack([csr_matrix(X_test_dense_transformed), X_test_tfidf])
+    X_test_merged = hstack([csr_matrix(X_test_dense_transformed), X_tfidf_test])
     
     print(f"  [Final] Merged dims: Dense={X_train_full_dense_transformed.shape[1]} + TF-IDF={X_train_full_tfidf.shape[1]} = {X_train_full_merged.shape[1]}")
     
