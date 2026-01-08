@@ -152,6 +152,8 @@ def parse_args():
     # 排除設定
     ap.add_argument('--exclude-products', type=str, default=None,
                     help='排除的商品 ID（逗號分隔）')
+    ap.add_argument('--apply-filter-tag', type=str, default=None,
+                    help='套用 ml_data_filters 表的過濾清單 (version_tag)，可用逗號分隔多個')
     
     # 論文模式
     ap.add_argument('--paper-mode', action='store_true', default=True,
@@ -204,6 +206,53 @@ def load_real_data(args):
     print(f"  Positive rate: {(y==1).sum() / len(y):.2%}")
     
     return X_dense_df, X_tfidf, y, meta, vocab
+
+
+def load_filter_exclusions(filter_tags: str):
+    """
+    Load product exclusion list from ml_data_filters table
+    
+    Args:
+        filter_tags: Comma-separated version_tag(s) to apply
+    
+    Returns:
+        set of product_ids to exclude
+    """
+    if not filter_tags:
+        return set()
+    
+    import psycopg2
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        print("  ⚠️  DATABASE_URL not set, skipping filter application")
+        return set()
+    
+    conn = psycopg2.connect(db_url)
+    cur = conn.cursor()
+    
+    tags = [tag.strip() for tag in filter_tags.split(',')]
+    excluded_ids = set()
+    
+    print(f"\n  📋 Loading filters from ml_data_filters...")
+    for tag in tags:
+        cur.execute("""
+            SELECT filter_value
+            FROM ml_data_filters
+            WHERE version_tag = %s
+              AND filter_level = 'product_id';
+        """, (tag,))
+        
+        rows = cur.fetchall()
+        tag_ids = set(int(row[0]) for row in rows)
+        excluded_ids.update(tag_ids)
+        
+        print(f"    {tag}: {len(tag_ids)} products")
+    
+    cur.close()
+    conn.close()
+    
+    print(f"  ✅ Total excluded products: {len(excluded_ids)}")
+    return excluded_ids
 
 
 def train_with_new_pipeline(args):
@@ -272,6 +321,33 @@ def train_with_new_pipeline(args):
     if df_full['product_id'].duplicated().any():
         raise ValueError("Duplicate product_ids found in training set! This will cause X-y misalignment.")
     df_full_idx = df_full.set_index('product_id', drop=False)
+    
+    # ========================================================================
+    # 步驟 2.5: 套用 ml_data_filters 過濾清單 (Soft Delete)
+    # ========================================================================
+    if args.apply_filter_tag:
+        print("\n" + "="*80)
+        print("🗑️  套用 ml_data_filters 過濾清單")
+        print("="*80)
+        print(f"  Filter tags: {args.apply_filter_tag}")
+        
+        before_count = len(df_full)
+        excluded_ids = load_filter_exclusions(args.apply_filter_tag)
+        
+        if excluded_ids:
+            # Filter out excluded products
+            mask = ~df_full['product_id'].isin(excluded_ids)
+            df_full = df_full[mask].reset_index(drop=True)
+            df_full_idx = df_full.set_index('product_id', drop=False)
+            
+            after_count = len(df_full)
+            filtered_count = before_count - after_count
+            
+            print(f"  Before: {before_count} products")
+            print(f"  After:  {after_count} products")
+            print(f"  ✅ Filtered: {filtered_count} products ({filtered_count/before_count*100:.2f}%)")
+        else:
+            print("  ⚠️  No products excluded (filter returned empty set)")
     
     # ========================================================================
     # 步驟 3: 創建切分 (固定 8:2 + K-fold CV)
