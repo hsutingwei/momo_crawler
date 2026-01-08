@@ -18,18 +18,21 @@ Usage:
 
 import argparse
 import os
+import sys
 import pandas as pd
-import psycopg2
 from psycopg2.extras import execute_values
 from datetime import datetime
 
+# Add project root to path (same as data_loader.py)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config.database import DatabaseConfig
+
 
 def get_db_connection():
-    """Connect to PostgreSQL database using DATABASE_URL env var"""
-    db_url = os.environ.get('DATABASE_URL')
-    if not db_url:
-        raise ValueError("DATABASE_URL environment variable not set")
-    return psycopg2.connect(db_url)
+    """Get a psycopg2 connection using DatabaseConfig (same as data_loader.py)"""
+    db_config = DatabaseConfig()
+    return db_config.get_connection()
 
 
 def build_min_comments_filter(cutoff: str, min_comments: int):
