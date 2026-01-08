@@ -618,66 +618,76 @@ def train_with_new_pipeline(args):
     # ========================================================================
     # TF-IDF 2A: PREFIT ONCE on train_pool (80%), test NEVER participates in fit
     # ========================================================================
-    print("\n  📝 TF-IDF 2A: Prefit on train_pool(80%)...")
     
-    train_pool_ids = train_pool['product_id'].tolist()
-    test_ids = test_set['product_id'].tolist()
-    
-    # Get document texts
-    train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
-    test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
-    
-    # Empty doc ratio check
-    train_pool_empty_ratio = (train_pool_docs == '').mean()
-    test_empty_ratio = (test_docs == '').mean()
-    print(f"    TFIDF(prefit) Empty doc ratio: train_pool={train_pool_empty_ratio:.2%}, test={test_empty_ratio:.2%}")
-    
-    # Detect tokenization type
-    sample_docs = [d for d in train_pool_docs[:20] if d]
-    has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
-    
-    if has_spaces:
-        tfidf_vectorizer = TfidfVectorizer(
-            max_features=args.tfidf_dim,
-            tokenizer=str.split,
-            preprocessor=None,
-            token_pattern=None,
-            lowercase=False
-        )
-        print(f"    TFIDF(prefit) tokenizer: str.split (pre-tokenized)")
+    # Skip TF-IDF if dimension is 0
+    if args.tfidf_dim == 0:
+        print("\n  📝 TF-IDF 2A: Skipped (tfidf_dim=0)")
+        X_tfidf_train_pool = None
+        X_tfidf_test = None
+        tfidf_vectorizer = None
+        tfidf_vocab_hash = None
     else:
-        tfidf_vectorizer = TfidfVectorizer(
-            max_features=args.tfidf_dim,
-            analyzer='char_wb',
-            ngram_range=(2, 4),
-            lowercase=False
-        )
-        print(f"    TFIDF(prefit) tokenizer: char_wb n-grams (raw Chinese)")
-    
-    # FIT ONLY ON TRAIN_POOL - test never sees fit!
-    tfidf_vectorizer.fit(train_pool_docs)
-    
-    # Transform both train_pool and test
-    X_tfidf_train_pool = tfidf_vectorizer.transform(train_pool_docs)
-    X_tfidf_test = tfidf_vectorizer.transform(test_docs)
-    
-    # Compute vocab hash for reproducibility
-    vocab_sorted = sorted(tfidf_vectorizer.vocabulary_.keys())
-    tfidf_vocab_hash = hashlib.sha256('|'.join(vocab_sorted).encode('utf-8')).hexdigest()[:16]
-    
-    print(f"    TFIDF(prefit) train_pool shape={X_tfidf_train_pool.shape}, nnz={X_tfidf_train_pool.nnz}")
-    print(f"    TFIDF(prefit) test shape={X_tfidf_test.shape}, nnz={X_tfidf_test.nnz}")
-    print(f"    TFIDF(prefit) vocab_size={len(tfidf_vectorizer.vocabulary_)}, vocab_hash={tfidf_vocab_hash}")
-    
-    # Save prefit vectorizer and vocab
-    vectorizer_path = os.path.join(run_dir, 'tfidf_vectorizer_trainpool.joblib')
-    joblib.dump(tfidf_vectorizer, vectorizer_path)
-    
-    vocab_path = os.path.join(run_dir, 'tfidf_vocab_trainpool.json')
-    with open(vocab_path, 'w', encoding='utf-8') as f:
-        json.dump({
-            'vocab_size': len(vocab_sorted),
-            'vocab_hash': tfidf_vocab_hash,
+        print("\n  📝 TF-IDF 2A: Prefit on train_pool(80%)...")
+        
+        train_pool_ids = train_pool['product_id'].tolist()
+        test_ids = test_set['product_id'].tolist()
+        
+        # Get document texts
+        train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
+        test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
+        
+        # Empty doc ratio check
+        train_pool_empty_ratio = (train_pool_docs == '').mean()
+        test_empty_ratio = (test_docs == '').mean()
+        print(f"    TFIDF(prefit) Empty doc ratio: train_pool={train_pool_empty_ratio:.2%}, test={test_empty_ratio:.2%}")
+        
+        # Detect tokenization type
+        sample_docs = [d for d in train_pool_docs[:20] if d]
+        has_spaces = any(' ' in d for d in sample_docs) if sample_docs else False
+        
+        if has_spaces:
+            tfidf_vectorizer = TfidfVectorizer(
+                max_features=args.tfidf_dim,
+                tokenizer=str.split,
+                preprocessor=None,
+                token_pattern=None,
+                lowercase=False
+            )
+            print(f"    TFIDF(prefit) tokenizer: str.split (pre-tokenized)")
+        else:
+            tfidf_vectorizer = TfidfVectorizer(
+                max_features=args.tfidf_dim,
+                analyzer='char_wb',
+                ngram_range=(2, 4),
+                lowercase=False
+            )
+            print(f"    TFIDF(prefit) tokenizer: char_wb n-grams (raw Chinese)")
+        
+        # FIT ONLY ON TRAIN_POOL - test never sees fit!
+        tfidf_vectorizer.fit(train_pool_docs)
+        
+        # Transform both train_pool and test
+        X_tfidf_train_pool = tfidf_vectorizer.transform(train_pool_docs)
+        X_tfidf_test = tfidf_vectorizer.transform(test_docs)
+        
+        # Compute vocab hash for reproducibility
+        vocab_sorted = sorted(tfidf_vectorizer.vocabulary_.keys())
+        tfidf_vocab_hash = hashlib.sha256('|'.join(vocab_sorted).encode('utf-8')).hexdigest()[:16]
+        
+        print(f"    TFIDF(prefit) train_pool shape={X_tfidf_train_pool.shape}, nnz={X_tfidf_train_pool.nnz}")
+        print(f"    TFIDF(prefit) test shape={X_tfidf_test.shape}, nnz={X_tfidf_test.nnz}")
+        print(f"    TFIDF(prefit) vocab_size={len(tfidf_vectorizer.vocabulary_)}, vocab_hash={tfidf_vocab_hash}")
+        
+        # Save prefit vectorizer and vocab
+        vectorizer_path = os.path.join(run_dir, 'tfidf_vectorizer_trainpool.joblib')
+        joblib.dump(tfidf_vectorizer, vectorizer_path)
+        
+        vocab_path = os.path.join(run_dir, 'tfidf_vocab_trainpool.json')
+        with open(vocab_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'vocab_size': len(vocab_sorted),
+                'vocab_hash': tfidf_vocab_hash,
+
             'vocabulary': vocab_sorted
         }, f, ensure_ascii=False, indent=2)
     print(f"    ✅ Saved: tfidf_vectorizer_trainpool.joblib, tfidf_vocab_trainpool.json")
