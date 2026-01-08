@@ -221,13 +221,15 @@ def load_filter_exclusions(filter_tags: str):
     if not filter_tags:
         return set()
     
-    import psycopg2
-    db_url = os.environ.get('DATABASE_URL')
-    if not db_url:
-        print("  ⚠️  DATABASE_URL not set, skipping filter application")
+    try:
+        from config.database import DatabaseConfig
+        db_config = DatabaseConfig()
+        conn = db_config.get_connection()
+    except Exception as e:
+        print(f"  ⚠️  Failed to connect to database: {e}")
+        print("  Skipping filter application")
         return set()
     
-    conn = psycopg2.connect(db_url)
     cur = conn.cursor()
     
     tags = [tag.strip() for tag in filter_tags.split(',')]
