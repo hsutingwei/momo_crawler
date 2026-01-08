@@ -619,6 +619,10 @@ def train_with_new_pipeline(args):
     # TF-IDF 2A: PREFIT ONCE on train_pool (80%), test NEVER participates in fit
     # ========================================================================
     
+    # Always extract train/test IDs (needed for position mapping even without TF-IDF)
+    train_pool_ids = train_pool['product_id'].tolist()
+    test_ids = test_set['product_id'].tolist()
+    
     # Skip TF-IDF if dimension is 0
     if args.tfidf_dim == 0:
         print("\n  📝 TF-IDF 2A: Skipped (tfidf_dim=0)")
@@ -629,12 +633,10 @@ def train_with_new_pipeline(args):
     else:
         print("\n  📝 TF-IDF 2A: Prefit on train_pool(80%)...")
         
-        train_pool_ids = train_pool['product_id'].tolist()
-        test_ids = test_set['product_id'].tolist()
-        
         # Get document texts
         train_pool_docs = df_full_idx.loc[train_pool_ids, 'doc_text'].fillna('').values
         test_docs = df_full_idx.loc[test_ids, 'doc_text'].fillna('').values
+
         
         # Empty doc ratio check
         train_pool_empty_ratio = (train_pool_docs == '').mean()
