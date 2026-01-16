@@ -324,32 +324,9 @@ def train_with_new_pipeline(args):
         raise ValueError("Duplicate product_ids found in training set! This will cause X-y misalignment.")
     df_full_idx = df_full.set_index('product_id', drop=False)
     
-    # ========================================================================
-    # 步驟 2.5: 套用 ml_data_filters 過濾清單 (Soft Delete)
-    # ========================================================================
-    if args.apply_filter_tag:
-        print("\n" + "="*80)
-        print("🗑️  套用 ml_data_filters 過濾清單")
-        print("="*80)
-        print(f"  Filter tags: {args.apply_filter_tag}")
-        
-        before_count = len(df_full)
-        excluded_ids = load_filter_exclusions(args.apply_filter_tag)
-        
-        if excluded_ids:
-            # Filter out excluded products
-            mask = ~df_full['product_id'].isin(excluded_ids)
-            df_full = df_full[mask].reset_index(drop=True)
-            df_full_idx = df_full.set_index('product_id', drop=False)
-            
-            after_count = len(df_full)
-            filtered_count = before_count - after_count
-            
-            print(f"  Before: {before_count} products")
-            print(f"  After:  {after_count} products")
-            print(f"  ✅ Filtered: {filtered_count} products ({filtered_count/before_count*100:.2f}%)")
-        else:
-            print("  ⚠️  No products excluded (filter returned empty set)")
+    # NOTE: Filter application moved to Step 3.5 (after split) to preserve test set integrity
+    # Only train_pool will be filtered, test set stays complete
+
     
     # ========================================================================
     # 步驟 3: 創建切分 (固定 8:2 + K-fold CV)
@@ -415,6 +392,54 @@ def train_with_new_pipeline(args):
     
     print(f"  ✅ Fold 數量驗證通過: {args.n_folds} folds")
     
+    # ========================================================================
+    # 步驟 3.5: 套用 ml_data_filters 過濾清單 (僅 train_pool，test 不變)
+    # ========================================================================
+    if args.apply_filter_tag:
+        print("\n" + "="*80)
+        print("🗑️  步驟 3.5: 套用 ml_data_filters 過濾清單 (僅 train_pool)")
+        print("="*80)
+        print(f"  Filter tags: {args.apply_filter_tag}")
+        
+        excluded_ids = load_filter_exclusions(args.apply_filter_tag)
+        
+        if excluded_ids:
+            # Count samples BEFORE filtering
+            train_pool_before = splits_df[splits_df['split'] == 'train_pool'].copy()
+            test_before = splits_df[splits_df['split'] == 'test'].copy()
+            before_train_count = len(train_pool_before)
+            before_test_count = len(test_before)
+            
+            # CRITICAL: Only filter train_pool, keep test COMPLETE
+            mask_train_keep = (splits_df['split'] == 'train_pool') & (~splits_df['product_id'].isin(excluded_ids))
+            mask_test = splits_df['split'] == 'test'  # Keep ALL test samples
+            
+            splits_df = splits_df[mask_train_keep | mask_test].reset_index(drop=True)
+            
+            # Update df_full and df_full_idx to match filtered splits
+            remaining_pids = set(splits_df['product_id'])
+            df_full = df_full[df_full['product_id'].isin(remaining_pids)].reset_index(drop=True)
+            df_full_idx = df_full.set_index('product_id', drop=False)
+            
+            # Count samples AFTER filtering
+            train_pool_after = splits_df[splits_df['split'] == 'train_pool']
+            test_after = splits_df[splits_df['split'] == 'test']
+            after_train_count = len(train_pool_after)
+            after_test_count = len(test_after)
+            filtered_count = before_train_count - after_train_count
+            
+            print(f"  Train pool (before): {before_train_count} products")
+            print(f"  Train pool (after):  {after_train_count} products")
+            print(f"  ✅ Filtered from train_pool: {filtered_count} products ({filtered_count/before_train_count*100:.2f}%)")
+            print(f"  🔒 Test set unchanged: {before_test_count} → {after_test_count} products")
+            
+            # Verify test set is truly unchanged
+            if after_test_count != before_test_count:
+                raise ValueError(f"❌ TEST SET WAS FILTERED! Before={before_test_count}, After={after_test_count}")
+        else:
+            print("  ⚠️  No products excluded (filter returned empty set)")
+    
+
     # ========================================================================
     # 步驟 4: 計算 Hashes
     # ========================================================================
