@@ -349,6 +349,12 @@ def train_with_new_pipeline(args):
         print(f"  ✅ 從強制切分已載入 {len(splits_df)} 個樣本")
     else:
         # 正常創建切分
+        # CRITICAL: When filter is applied, we MUST force resplit to ensure
+        # splits are based on full dataset (7197), not previously filtered data
+        should_force_resplit = args.apply_filter_tag is not None
+        if should_force_resplit:
+            print("  ⚠️  Filter tag 已設定，強制重新生成 splits 以確保 test set 完整性")
+        
         splits_df = make_splits(
             df_full,
             holdout_strategy=args.holdout_strategy,
@@ -358,8 +364,28 @@ def train_with_new_pipeline(args):
             n_folds=args.n_folds,
             random_seed=args.random_seed,
             save_splits_path=os.path.join(run_dir, 'splits.parquet'),
-            force_resplit=False
+            force_resplit=should_force_resplit
         )
+    
+    # ========================================================================
+    # CRITICAL: Validate test set size matches expected
+    # ========================================================================
+    expected_test_size = int(len(df_full) * args.test_size)
+    actual_test_size = len(splits_df[splits_df['split'] == 'test'])
+    train_pool_size = len(splits_df[splits_df['split'] == 'train_pool'])
+    
+    print(f"\n  📊 Split 驗證:")
+    print(f"    Total samples: {len(splits_df)}")
+    print(f"    Train pool: {train_pool_size} ({train_pool_size/len(splits_df)*100:.1f}%)")
+    print(f"    Test set: {actual_test_size} ({actual_test_size/len(splits_df)*100:.1f}%)")
+    
+    # Allow small tolerance due to stratification
+    tolerance = 10
+    if abs(actual_test_size - expected_test_size) > tolerance:
+        print(f"  ⚠️  WARNING: Test set size ({actual_test_size}) differs from expected ({expected_test_size})")
+        print(f"    This may indicate the splits were created from filtered data!")
+        print(f"    Consider using --force-use-splits with a baseline splits file")
+
     
     # ========================================================================
     # ABLATION CONTROL: 驗證 Fold 數量一致性 (Fold Count Validation)
