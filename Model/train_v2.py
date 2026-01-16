@@ -720,22 +720,28 @@ def train_with_new_pipeline(args):
         y_val = val_fold_df.set_index('product_id').loc[val_ids, 'y_true'].values
         
         # ========== TF-IDF 2A: SLICE from prefit matrix (NO FIT in fold!) ==========
-        # Get row indices in the prefit X_tfidf_train_pool matrix
-        train_tfidf_indices = [train_pool_pos[pid] for pid in train_ids]
-        val_tfidf_indices = [train_pool_pos[pid] for pid in val_ids]
-        
-        # Slice TF-IDF from prefit matrix
-        X_train_tfidf = X_tfidf_train_pool[train_tfidf_indices]
-        X_val_tfidf = X_tfidf_train_pool[val_tfidf_indices]
-        
-        # 2A verification log
-        print(f"    [Fold {fold}] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (no fit in fold)")
-        print(f"    [Fold {fold}] TFIDF dim fixed={args.tfidf_dim}")
-        print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
-        
-        # Fail-fast if TF-IDF dimension mismatch
-        if X_train_tfidf.shape[1] != args.tfidf_dim:
-            raise ValueError(f"Fold {fold}: TF-IDF dimension mismatch! Expected {args.tfidf_dim}, got {X_train_tfidf.shape[1]}")
+        if X_tfidf_train_pool is not None:
+            # Get row indices in the prefit X_tfidf_train_pool matrix
+            train_tfidf_indices = [train_pool_pos[pid] for pid in train_ids]
+            val_tfidf_indices = [train_pool_pos[pid] for pid in val_ids]
+            
+            # Slice TF-IDF from prefit matrix
+            X_train_tfidf = X_tfidf_train_pool[train_tfidf_indices]
+            X_val_tfidf = X_tfidf_train_pool[val_tfidf_indices]
+            
+            # 2A verification log
+            print(f"    [Fold {fold}] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (no fit in fold)")
+            print(f"    [Fold {fold}] TFIDF dim fixed={args.tfidf_dim}")
+            print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}, TF-IDF dim: {X_train_tfidf.shape[1]}")
+            
+            # Fail-fast if TF-IDF dimension mismatch
+            if X_train_tfidf.shape[1] != args.tfidf_dim:
+                raise ValueError(f"Fold {fold}: TF-IDF dimension mismatch! Expected {args.tfidf_dim}, got {X_train_tfidf.shape[1]}")
+        else:
+            X_train_tfidf = None
+            X_val_tfidf = None
+            print(f"    [Fold {fold}] No TF-IDF (tfidf_dim=0), using dense features only")
+            print(f"    [Fold {fold}] Dense dim: {X_train_dense.shape[1]}")
         
         # 特徵轉換 dense features（包含防洩漏保護）
         transformer = FeatureTransformer(
@@ -748,23 +754,44 @@ def train_with_new_pipeline(args):
         
         # ========== CRITICAL: Alignment Validation ==========
         # These MUST all have the same row count
-        if not (len(train_ids) == X_train_dense.shape[0] == X_train_tfidf.shape[0] == len(y_train)):
-            raise ValueError(f"Fold {fold} ALIGNMENT ERROR: train_ids={len(train_ids)}, "
-                           f"X_dense={X_train_dense.shape[0]}, X_tfidf={X_train_tfidf.shape[0]}, y={len(y_train)}")
-        if not (len(val_ids) == X_val_dense.shape[0] == X_val_tfidf.shape[0] == len(y_val)):
-            raise ValueError(f"Fold {fold} ALIGNMENT ERROR: val_ids={len(val_ids)}, "
-                           f"X_val_dense={X_val_dense.shape[0]}, X_val_tfidf={X_val_tfidf.shape[0]}, y_val={len(y_val)}")
+        if X_train_tfidf is not None:
+            if not (len(train_ids) == X_train_dense.shape[0] == X_train_tfidf.shape[0] == len(y_train)):
+                raise ValueError(f"Fold {fold} ALIGNMENT ERROR: train_ids={len(train_ids)}, "
+                               f"X_dense={X_train_dense.shape[0]}, X_tfidf={X_train_tfidf.shape[0]}, y={len(y_train)}")
+            if not (len(val_ids) == X_val_dense.shape[0] == X_val_tfidf.shape[0] == len(y_val)):
+                raise ValueError(f"Fold {fold} ALIGNMENT ERROR: val_ids={len(val_ids)}, "
+                               f"X_val_dense={X_val_dense.shape[0]}, X_val_tfidf={X_val_tfidf.shape[0]}, y_val={len(y_val)}")
+        else:
+            if not (len(train_ids) == X_train_dense.shape[0] == len(y_train)):
+                raise ValueError(f"Fold {fold} ALIGNMENT ERROR: train_ids={len(train_ids)}, "
+                               f"X_dense={X_train_dense.shape[0]}, y={len(y_train)}")
+            if not (len(val_ids) == X_val_dense.shape[0] == len(y_val)):
+                raise ValueError(f"Fold {fold} ALIGNMENT ERROR: val_ids={len(val_ids)}, "
+                               f"X_val_dense={X_val_dense.shape[0]}, y_val={len(y_val)}")
         
         # ========== CRITICAL: Merge dense + TF-IDF ==========
-        X_train_merged = hstack([csr_matrix(X_train_dense_transformed), X_train_tfidf])
-        X_val_merged = hstack([csr_matrix(X_val_dense_transformed), X_val_tfidf])
+        if X_train_tfidf is not None:
+            X_train_merged = hstack([csr_matrix(X_train_dense_transformed), X_train_tfidf])
+            X_val_merged = hstack([csr_matrix(X_val_dense_transformed), X_val_tfidf])
+        else:
+            X_train_merged = csr_matrix(X_train_dense_transformed)
+            X_val_merged = csr_matrix(X_val_dense_transformed)
+
         
         # Sanity check
-        expected_dim = X_train_dense_transformed.shape[1] + X_train_tfidf.shape[1]
-        actual_dim = X_train_merged.shape[1]
-        print(f"    [Fold {fold}] Merged dims: Dense={X_train_dense_transformed.shape[1]} + TF-IDF={X_train_tfidf.shape[1]} = {actual_dim}")
-        if actual_dim != expected_dim:
-            raise ValueError(f"Fold {fold}: Merge failed! Expected {expected_dim}, got {actual_dim}")
+        if X_train_tfidf is not None:
+            expected_dim = X_train_dense_transformed.shape[1] + X_train_tfidf.shape[1]
+            actual_dim = X_train_merged.shape[1]
+            print(f"    [Fold {fold}] Merged dims: Dense={X_train_dense_transformed.shape[1]} + TF-IDF={X_train_tfidf.shape[1]} = {actual_dim}")
+            if actual_dim != expected_dim:
+                raise ValueError(f"Fold {fold}: Merge failed! Expected {expected_dim}, got {actual_dim}")
+        else:
+            expected_dim = X_train_dense_transformed.shape[1]
+            actual_dim = X_train_merged.shape[1]
+            print(f"    [Fold {fold}] Dense only dims: {actual_dim}")
+            if actual_dim != expected_dim:
+                raise ValueError(f"Fold {fold}: Dense matrix failed! Expected {expected_dim}, got {actual_dim}")
+
         
         # 防止数据洩漏檢查
         train_fold_ids = set(train_fold_df['product_id'])
@@ -879,12 +906,17 @@ def train_with_new_pipeline(args):
     
     # ========== TF-IDF 2A: USE PREFIT directly (same as CV, no re-fit!) ==========
     # X_tfidf_train_pool and X_tfidf_test were already computed in prefit stage
-    X_train_full_tfidf = X_tfidf_train_pool  # Already in correct order: train_pool_ids
-    # X_tfidf_test already exists from prefit
-    
-    print(f"  [Final] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (same as CV)")
-    print(f"  [Final] TFIDF train_pool shape={X_train_full_tfidf.shape}, test shape={X_tfidf_test.shape}")
-    print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
+    if X_tfidf_train_pool is not None:
+        X_train_full_tfidf = X_tfidf_train_pool  # Already in correct order: train_pool_ids
+        # X_tfidf_test already exists from prefit
+        
+        print(f"  [Final] Using prefit TFIDF vocab_hash={tfidf_vocab_hash} (same as CV)")
+        print(f"  [Final] TFIDF train_pool shape={X_train_full_tfidf.shape}, test shape={X_tfidf_test.shape}")
+        print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}, TF-IDF dim: {X_train_full_tfidf.shape[1]}")
+    else:
+        X_train_full_tfidf = None
+        print(f"  [Final] No TF-IDF (tfidf_dim=0), using dense features only")
+        print(f"  [Final] Dense dim: {X_train_full_dense.shape[1]}")
     
     # Transform dense features
     transformer_final = FeatureTransformer(profile=args.feature_transform_profile, feature_whitelist=available_features)
@@ -895,10 +927,15 @@ def train_with_new_pipeline(args):
     X_test_dense_transformed = transformer_final.transform(X_test_dense)
     
     # ========== Merge dense + TF-IDF ==========
-    X_train_full_merged = hstack([csr_matrix(X_train_full_dense_transformed), X_train_full_tfidf])
-    X_test_merged = hstack([csr_matrix(X_test_dense_transformed), X_tfidf_test])
-    
-    print(f"  [Final] Merged dims: Dense={X_train_full_dense_transformed.shape[1]} + TF-IDF={X_train_full_tfidf.shape[1]} = {X_train_full_merged.shape[1]}")
+    if X_train_full_tfidf is not None:
+        X_train_full_merged = hstack([csr_matrix(X_train_full_dense_transformed), X_train_full_tfidf])
+        X_test_merged = hstack([csr_matrix(X_test_dense_transformed), X_tfidf_test])
+        print(f"  [Final] Merged dims: Dense={X_train_full_dense_transformed.shape[1]} + TF-IDF={X_train_full_tfidf.shape[1]} = {X_train_full_merged.shape[1]}")
+    else:
+        X_train_full_merged = csr_matrix(X_train_full_dense_transformed)
+        X_test_merged = csr_matrix(X_test_dense_transformed)
+        print(f"  [Final] Dense only dims: {X_train_full_merged.shape[1]}")
+
     
     # 對於最終模型使用 train_pool scope
     n_pos = (y_train_full == 1).sum()
