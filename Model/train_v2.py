@@ -40,9 +40,12 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
 from scipy.sparse import hstack, csr_matrix
 import joblib  # For serializing vectorizer
 import xgboost as xgb
+import lightgbm as lgb
 
 # 匯入數據加載器
 from data_loader import load_product_level_training_set
@@ -110,8 +113,8 @@ def parse_args():
     
     # 模型設定
     ap.add_argument('--model-type', type=str, default='xgboost',
-                    choices=['xgboost'],
-                    help='模型類型（目前只支援 xgboost）')
+                    choices=['xgboost', 'logistic_regression', 'linear_svm', 'lightgbm'],
+                    help='模型類型')
     ap.add_argument('--hyperparameter-mode', type=str, default='tuning',
                     choices=['tuning', 'locked'],
                     help='超參數模式：tuning（搜尋）或 locked（使用 baseline）')
@@ -161,9 +164,9 @@ def parse_args():
     
     # 硬體優化
     ap.add_argument('--use-gpu', action='store_true', default=True,
-                    help='使用 GPU 加速 (XGBoost gpu_hist)')
-    ap.add_argument('--n-jobs', type=int, default=16,
-                    help='XGBoost 訓練線程數（建議為 CPU 線程數的一半）')
+                    help='使用 GPU 加速 (XGBoost/LightGBM)')
+    ap.add_argument('--n-jobs', type=int, default=32,
+                    help='訓練並行線程數（已根據您的 32 核心硬體調整為預設 32）')
     ap.add_argument('--gpu-id', type=int, default=0,
                     help='GPU 設備 ID')
     
@@ -812,28 +815,61 @@ def train_with_new_pipeline(args):
         # 使用 scale_pos_weight 訓練模型
         spw = imbalance_report['folds'][f'fold_{fold}']['scale_pos_weight']
         
-        # 建立 XGBoost 參數
-        xgb_params = {
-            'max_depth': 6,
-            'learning_rate': 0.1,
-            'n_estimators': 100,
-            'scale_pos_weight': spw if args.imbalance_mode == 'scale_pos_weight' else 1.0,
-            'random_state': args.random_seed,
-            'eval_metric': 'logloss'
-        }
-        
-        # 硬體優化 (i9-13900K + RTX 4080)
-        if args.use_gpu:
-            xgb_params.update({
-                'tree_method': 'gpu_hist',
-                'gpu_id': args.gpu_id,
-                'predictor': 'gpu_predictor',
-                'max_bin': 256  # GPU optimal
-            })
-        
-        xgb_params['n_jobs'] = args.n_jobs
-        
-        model = xgb.XGBClassifier(**xgb_params)
+        # 建立模型
+        if args.model_type == 'xgboost':
+            xgb_params = {
+                'max_depth': 6,
+                'learning_rate': 0.1,
+                'n_estimators': 100,
+                'scale_pos_weight': spw if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+                'random_state': args.random_seed,
+                'eval_metric': 'logloss',
+                'n_jobs': args.n_jobs
+            }
+            if args.use_gpu:
+                xgb_params.update({
+                    'tree_method': 'gpu_hist',
+                    'gpu_id': args.gpu_id,
+                    'predictor': 'gpu_predictor',
+                    'max_bin': 256  # GPU optimal
+                })
+            model = xgb.XGBClassifier(**xgb_params)
+        elif args.model_type == 'lightgbm':
+            lgb_params = {
+                'max_depth': 6,
+                'learning_rate': 0.1,
+                'n_estimators': 100,
+                'scale_pos_weight': spw if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+                'random_state': args.random_seed,
+                'n_jobs': args.n_jobs,
+                'verbose': -1
+            }
+            if args.use_gpu:
+                lgb_params.update({
+                    'device': 'gpu',
+                    'gpu_platform_id': 0,
+                    'gpu_device_id': args.gpu_id
+                })
+            model = lgb.LGBMClassifier(**lgb_params)
+        elif args.model_type == 'logistic_regression':
+            lr_params = {
+                'random_state': args.random_seed,
+                'max_iter': 1000,
+                'class_weight': {0: 1.0, 1: spw} if args.imbalance_mode == 'scale_pos_weight' else None,
+                'n_jobs': args.n_jobs  # 使用全部 32 核心並行運算
+            }
+            model = LogisticRegression(**lr_params)
+        elif args.model_type == 'linear_svm':
+            svm_params = {
+                'kernel': 'linear',
+                'probability': True,
+                'random_state': args.random_seed,
+                'class_weight': {0: 1.0, 1: spw} if args.imbalance_mode == 'scale_pos_weight' else None,
+                'cache_size': 4000  # 提供 4GB cache memory 給 SVM 訓練加速
+            }
+            model = SVC(**svm_params)
+        else:
+            raise ValueError(f"不支援的模型類型: {args.model_type}")
         
         model.fit(X_train_merged, y_train)
         
@@ -942,26 +978,61 @@ def train_with_new_pipeline(args):
     n_neg = (y_train_full == 0).sum()
     spw_final = n_neg / n_pos if n_pos > 0 else 1.0
     
-    # 建立最終模型參數
-    xgb_params_final = {
-        'max_depth': 6,
-        'learning_rate': 0.1,
-        'n_estimators': 100,
-        'scale_pos_weight': spw_final if args.imbalance_mode == 'scale_pos_weight' else 1.0,
-        'random_state': args.random_seed
-    }
+    # 建立最終模型
+    if args.model_type == 'xgboost':
+        xgb_params_final = {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 100,
+            'scale_pos_weight': spw_final if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+            'random_state': args.random_seed,
+            'n_jobs': args.n_jobs
+        }
+        if args.use_gpu:
+            xgb_params_final.update({
+                'tree_method': 'gpu_hist',
+                'gpu_id': args.gpu_id,
+                'predictor': 'gpu_predictor',
+                'max_bin': 256
+            })
+        model_final = xgb.XGBClassifier(**xgb_params_final)
+    elif args.model_type == 'lightgbm':
+        lgb_params_final = {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 100,
+            'scale_pos_weight': spw_final if args.imbalance_mode == 'scale_pos_weight' else 1.0,
+            'random_state': args.random_seed,
+            'n_jobs': args.n_jobs,
+            'verbose': -1
+        }
+        if args.use_gpu:
+            lgb_params_final.update({
+                'device': 'gpu',
+                'gpu_platform_id': 0,
+                'gpu_device_id': args.gpu_id
+            })
+        model_final = lgb.LGBMClassifier(**lgb_params_final)
+    elif args.model_type == 'logistic_regression':
+        lr_params_final = {
+            'random_state': args.random_seed,
+            'max_iter': 1000,
+            'class_weight': {0: 1.0, 1: spw_final} if args.imbalance_mode == 'scale_pos_weight' else None,
+            'n_jobs': args.n_jobs  # 使用 CPU 全部核心
+        }
+        model_final = LogisticRegression(**lr_params_final)
+    elif args.model_type == 'linear_svm':
+        svm_params_final = {
+            'kernel': 'linear',
+            'probability': True,
+            'random_state': args.random_seed,
+            'class_weight': {0: 1.0, 1: spw_final} if args.imbalance_mode == 'scale_pos_weight' else None,
+            'cache_size': 4000  # 4GB cache size
+        }
+        model_final = SVC(**svm_params_final)
+    else:
+        raise ValueError(f"不支援的模型類型: {args.model_type}")
     
-    if args.use_gpu:
-        xgb_params_final.update({
-            'tree_method': 'gpu_hist',
-            'gpu_id': args.gpu_id,
-            'predictor': 'gpu_predictor',
-            'max_bin': 256
-        })
-    
-    xgb_params_final['n_jobs'] = args.n_jobs
-    
-    model_final = xgb.XGBClassifier(**xgb_params_final)
     model_final.fit(X_train_full_merged, y_train_full)
     
     # Predict on test set using merged features
