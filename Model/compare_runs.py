@@ -31,7 +31,7 @@ def load_run_metrics(run_id: str, runs_dir: str = 'runs'):
         return None
     
     metrics_path = os.path.join(run_dir, 'metrics.json')
-    config_path = os.path.join(run_dir, 'config.json')
+    config_path = os.path.join(run_dir, 'run_config.json')
     
     if not os.path.exists(metrics_path):
         print(f"⚠️  Metrics file not found: {metrics_path}")
@@ -235,8 +235,8 @@ def plot_oof_auc_comparison(df: pd.DataFrame, output_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(description='Compare experiment results from multiple runs')
-    parser.add_argument('--run-ids', type=str, required=True,
-                       help='Comma-separated list of run IDs to compare')
+    parser.add_argument('--run-ids', type=str, required=False,
+                       help='Comma-separated list of run IDs to compare. If omitted, will compare all valid runs in --runs-dir')
     parser.add_argument('--runs-dir', type=str, default='runs',
                        help='Directory containing run folders')
     parser.add_argument('--output-dir', type=str, default='comparison_results',
@@ -245,7 +245,12 @@ def main():
     args = parser.parse_args()
     
     # Parse run IDs
-    run_ids = [rid.strip() for rid in args.run_ids.split(',')]
+    if args.run_ids:
+        run_ids = [rid.strip() for rid in args.run_ids.split(',')]
+    else:
+        import glob
+        run_ids = [os.path.basename(d) for d in glob.glob(os.path.join(args.runs_dir, '*')) if os.path.isdir(d)]
+        print(f"📌 No --run-ids provided. Auto-detected {len(run_ids)} valid folders in {args.runs_dir}.")
     
     print(f"\n🔍 Loading metrics for {len(run_ids)} runs...")
     
