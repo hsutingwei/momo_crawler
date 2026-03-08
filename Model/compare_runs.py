@@ -46,11 +46,19 @@ def load_run_metrics(run_id: str, runs_dir: str = 'runs'):
     if os.path.exists(config_path):
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
+            
+    # Load metadata if exists
+    metadata_path = os.path.join(run_dir, 'samples_metadata.json')
+    metadata = {}
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
     
     return {
         'run_id': run_id,
         'metrics': metrics,
-        'config': config
+        'config': config,
+        'metadata': metadata
     }
 
 
@@ -70,6 +78,7 @@ def create_comparison_dataframe(run_data_list):
         run_id = run_data['run_id']
         metrics = run_data['metrics']
         config = run_data['config']
+        metadata = run_data.get('metadata', {})
         
         record = {
             'run_id': run_id,
@@ -104,9 +113,14 @@ def create_comparison_dataframe(run_data_list):
             record['oof_f1_std'] = None
         
         # Sample counts
-        record['n_samples'] = metrics.get('n_samples')
-        record['n_train'] = metrics.get('n_train')
-        record['n_test'] = metrics.get('n_test')
+        record['n_samples'] = metrics.get('n_samples') or metadata.get('included_products')
+        
+        if record['n_samples'] and config.get('test_size'):
+            record['n_test'] = metrics.get('n_test') or int(record['n_samples'] * config.get('test_size'))
+            record['n_train'] = metrics.get('n_train') or (record['n_samples'] - record['n_test'])
+        else:
+            record['n_train'] = metrics.get('n_train')
+            record['n_test'] = metrics.get('n_test')
         
         data.append(record)
     
