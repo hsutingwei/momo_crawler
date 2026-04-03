@@ -52,6 +52,16 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.database import DatabaseConfig  # <-- same as csv_to_db.py
 
+try:
+    from Model.surrogate_structure_features import (
+        build_surrogate_structure_features,
+        SURROGATE_FEATURE_COLS,
+    )
+    _SURROGATE_FEATURES_AVAILABLE = True
+except ImportError:
+    _SURROGATE_FEATURES_AVAILABLE = False
+    SURROGATE_FEATURE_COLS = []
+
 # ====================== 銷售級距相關工具函數 ======================
 
 # 銷售級距定義（離散 bucket）
@@ -1151,10 +1161,18 @@ def load_product_level_training_set(
         # Rationale: Help tree split "Old Hits" from "New Hits".
         df["is_mature_product"] = ((df["comment_count_pre"] > 50) | (df["repurchase_ratio_recent"] > 0.2)).astype(int)
 
+        # =========================================================
+        # v2 surrogate structure-derived features
+        # =========================================================
+        if _SURROGATE_FEATURES_AVAILABLE:
+            df = build_surrogate_structure_features(df, verbose=True)
+        else:
+            print("  ⚠️  surrogate_structure_features not available, skipping.")
+
         # Handle days_since_last_comment for items with no comments
         df.loc[df["comment_count_pre"] == 0, "days_since_last_comment"] = 365.0
         
-        dense_cols_extended = dense_cols + ["price_weighted_novelty"]
+        dense_cols_extended = dense_cols + ["price_weighted_novelty"] + SURROGATE_FEATURE_COLS
         
         for c in dense_cols_extended:
             if c not in df.columns:

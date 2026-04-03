@@ -89,7 +89,7 @@ def parse_args():
     
     # 特徵工程
     ap.add_argument('--feature-set', type=str, default='baseline',
-                    choices=['baseline', '+physical', '+semantic', '+psych'],
+                    choices=['baseline', '+physical', '+semantic', '+psych', '+surrogate'],
                     help='特徵集合')
     ap.add_argument('--feature-transform-profile', type=str, default='phaseA',
                     choices=['none', 'phaseA', 'phaseB'],

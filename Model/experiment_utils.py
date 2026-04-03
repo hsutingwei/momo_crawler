@@ -295,6 +295,9 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
     - +semantic: +physical + 語義特徵
     - +psych: +semantic + 心理層特徵
     
+    或者可以進行平行測試 (Parallel Testing)
+    - +surrogate: baseline + 10 個代理結構特徵 (v2_error_prod structure analysis)
+    
     注意: quality_driven_momentum 需要 category_fit_score，
           但在消融實驗中歸類為 physical layer (複合動量)
     """
@@ -341,6 +344,14 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
         'spam_risk_score'  # Composite spam risk
     ]
     
+    # Surrogate features (代理結構特徵 10個)
+    surrogate = [
+        'is_high_arousal_high_volume', 'is_high_arousal_high_negative', 'is_high_ncd_high_fit',
+        'interaction_arousal_volume', 'interaction_arousal_negative', 'interaction_ncd_fit',
+        'conflict_signal_score', 'v2_surrogate_cluster_id',
+        'is_cluster_like_high_complexity', 'is_cluster_like_emotion_ad_mix'
+    ]
+    
     if feature_set == 'baseline':
         return baseline
     elif feature_set == '+physical':
@@ -349,6 +360,8 @@ def get_feature_whitelist(feature_set: str) -> List[str]:
         return baseline + physical + semantic
     elif feature_set == '+psych':
         return baseline + physical + semantic + psych
+    elif feature_set == '+surrogate':
+        return baseline + surrogate
     else:
         raise ValueError(f"未知的 feature_set: {feature_set}")
 
