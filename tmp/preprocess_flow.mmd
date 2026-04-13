@@ -1,0 +1,42 @@
+graph TD
+    A([原始 CSV 資料輸入]) --> B{修復斷行與格式化}
+    B -- 檔案內容重構 --> C[逐筆讀取 CSV 行]
+    
+    C --> D{條件：欄位數量是否 >= 7}
+    D -- 否 --> Exclude1[排除：無效資料]
+    D -- 是 --> E{條件：留言 ID 是否重複?}
+    
+    E -- 是 --> Exclude2[排除：重複評論]
+    E -- 否 --> F[提取原始評論與商品名稱]
+    
+    F --> G[文字正規化 normalize_text]
+    G --> G1[1. Unicode NFKC 正規化]
+    G1 --> G2[2. OpenCC 簡體轉繁體]
+    G2 --> G3[3. 正則表達式移除網址 URL]
+    G3 --> G4[4. 正則表達式移除控制字元]
+    G4 --> G5[5. 清理多餘空白縮減為單一空白]
+    
+    G5 --> H[字元過濾 sanitize_chinese]
+    H --> H1[1. 將非中文字元替換為分號 ;]
+    H1 --> H2[2. 將特殊標點與符號替換為分號 ;]
+    H2 --> H3[3. 移除首尾之分號 ;]
+    
+    H3 --> I{條件：清理後文本是否為空字串?}
+    I -- 是 (空字串) --> J[跳過斷詞，輸出空陣列]
+    I -- 否 (有內容) --> K[執行 CKIP 斷詞與詞性標記]
+    
+    K --> L[執行過長詞語拆分邏輯]
+    L --> L1[長度 > 4 之詞彙，比對 2~3 字輔助字典]
+    L1 --> L2[以右向左最大匹配法切分輔助短詞]
+    
+    J --> M
+    L2 --> M[將斷詞與詞性結果組合]
+    M --> N([輸出為正規化 CSV 與 JSONL 格式])
+    
+    classDef exclude fill:#f9d0c4,stroke:#e08472;
+    classDef process fill:#e1f5fe,stroke:#4fc3f7;
+    classDef check fill:#fff9c4,stroke:#fbc02d;
+    
+    class Exclude1,Exclude2,J exclude;
+    class G1,G2,G3,G4,G5,H1,H2,H3,K,L1,L2 process;
+    class D,E,I check;
