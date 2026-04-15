@@ -848,6 +848,7 @@ def load_product_level_training_set(
         LEFT JOIN media_agg m ON m.product_id = p.id
         LEFT JOIN pre_seq s   ON s.product_id = p.id
         WHERE p.id <> ALL(%(excluded)s)
+          AND EXISTS (SELECT 1 FROM product_comments pc WHERE pc.product_id = p.id)
         """
         dense = pd.read_sql(sql_dense, conn, params=params)
 
