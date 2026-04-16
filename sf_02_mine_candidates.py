@@ -11,33 +11,42 @@ SF Pipeline Step 2：從高信心評論挖掘 unigram 候選詞
   - 附加 3 筆 example_comment_ids（同 label 中得分最高的）
   - 寫入 sf_keyword_candidates
 
+過濾層次（依序執行）：
+  1. SQL 基礎過濾：min_tf / min_df / token 長度 / 純數字 / 基礎停用詞
+  2. POS 白名單過濾：保留語意有效詞性（可加 --exclude-nb 排除專有名詞）
+  3. 通用 blacklist：對所有 label 都無辨識力的泛詞（可用 --no-generic-blacklist 關閉）
+  4. label-specific blacklist：各 label 的專屬排除詞（可用 --no-label-blacklist 關閉）
+
 使用方式：
-  # 先 dry-run，確認參數與筆數
+  # 先 dry-run，確認過濾統計（預設啟用所有 blacklist + --exclude-nb）
   python sf_02_mine_candidates.py \\
       --run-id nli-seed-v1 \\
       --label-name High_Novelty \\
-      --pipeline-version ckip-pre-v1 \\
-      --corpus-id 1 \\
+      --pipeline-version "20250813_2608d61dc5b6d77a4a4582546ccb8a595673b5ac" \\
+      --corpus-id 5 \\
+      --exclude-nb \\
       --dry-run
 
-  # 正式挖掘並寫入（top 150 筆）
+  # 正式寫入（指定 mining_run 版本號方便追蹤）
   python sf_02_mine_candidates.py \\
       --run-id nli-seed-v1 \\
       --label-name High_Novelty \\
-      --pipeline-version ckip-pre-v1 \\
-      --corpus-id 1 \\
-      --top-k 150 \\
+      --pipeline-version "20250813_2608d61dc5b6d77a4a4582546ccb8a595673b5ac" \\
+      --corpus-id 5 \\
+      --exclude-nb \\
+      --mining-run mine-v2-high-novelty-tf5-df3 \\
+      --top-k 100 \\
       --no-dry-run
 
-  # 調整門檻（更嚴格）
+  # debug 用：關閉所有 blacklist，看原始結果
   python sf_02_mine_candidates.py \\
       --run-id nli-seed-v1 \\
       --label-name High_Novelty \\
-      --pipeline-version ckip-pre-v1 \\
-      --corpus-id 1 \\
-      --min-tf 10 \\
-      --min-df 5 \\
-      --no-dry-run
+      --pipeline-version "20250813_2608d61dc5b6d77a4a4582546ccb8a595673b5ac" \\
+      --corpus-id 5 \\
+      --no-generic-blacklist \\
+      --no-label-blacklist \\
+      --dry-run
 """
 
 import os
@@ -91,8 +100,62 @@ BASIC_STOPWORDS = frozenset({
 DF_SMOOTHING = 0.001
 
 # dominant_pos / example_comment_ids 查詢時，先抓 top_k * BUFFER 筆
-# 再套 POS filter 後取 top_k
-QUERY_BUFFER_FACTOR = 2
+# 再套全部過濾後取 top_k
+QUERY_BUFFER_FACTOR = 4  # 從 2 調高到 4，為三層 Python 過濾預留足夠空間
+
+
+# ─────────────────────────────────────────────────────────────
+# 通用 Blacklist：對所有 label 都無辨識力的泛詞
+#
+# 設計原則：
+#   - 只放高確定性的，不貪多
+#   - 這些詞不論在哪個 label 的高信心集合裡都會高頻出現
+#   - 不放情感詞（超/好/真）—— 這些留給人工審閱
+# ─────────────────────────────────────────────────────────────
+GENERIC_BLACKLIST = frozenset({
+    # 評論行為詞（meta-commentary，本身不是語意信號）
+    "評價", "評論", "評分", "留言", "回饋",
+    # 過泛的體驗詞（在幾乎所有 label 的高信心集合都高頻，無鑑別力）
+    "效果", "感受", "功效", "功能", "作用",
+    # 過泛的認知詞（單獨出現時無法對應特定語意）
+    "知道", "覺得", "認為", "感覺",
+    # 過泛的期待詞
+    "希望", "期待", "期望",
+    # 人際關係詞（使用情境描述，不是語意信號）
+    "朋友", "家人", "老婆", "老公", "媽媽", "爸爸",
+    # 口感/味道（對大部分語意 label 無鑑別力，保健品、食品語料常見）
+    "味道", "口味", "口感", "甜度", "風味",
+    # 商品描述泛詞
+    "品牌", "品質",
+})
+
+
+# ─────────────────────────────────────────────────────────────
+# Label-specific Blacklist：各 label 的專屬排除詞
+#
+# 設計原則：
+#   - 只放「在此 label 高信心評論中高頻，但語意上是巧合」的詞
+#   - 例如 High_Novelty 語料集中大量保健品評論，成分名出現率高
+#     但 '益生菌' 本身不代表新奇語意
+#   - 其他 label 預留空集合，後續擴增時補入
+# ─────────────────────────────────────────────────────────────
+LABEL_BLACKLIST: dict[str, frozenset] = {
+    "High_Novelty": frozenset({
+        # 健康食品成分名（高頻但非語意信號）
+        "葉黃素", "益生菌", "膠原", "蛋白", "生醫",
+        "魚油", "膠囊", "維生素", "維他命", "乳酸菌",
+        # 食材/食品名
+        "鮭魚", "鱈魚",
+        # 品牌名（首次購買某品牌 → 語意是「首次」，但詞本身是品牌名）
+        # 品牌名優先用 --exclude-nb 擋，此處補漏網的 Na 標記品牌
+        "天王", "中江", "歐可",
+    }),
+    # 其他 label 的 blacklist 待後續補入
+    "High_Arousal":           frozenset(),
+    "High_Repurchase_Intent": frozenset(),
+    "Negative_Complaint":     frozenset(),
+    "Advertisement":          frozenset(),
+}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -344,13 +407,24 @@ def apply_pos_filter(
     candidates: list[dict],
     pos_map: dict[str, str],
     use_pos_filter: bool,
-) -> list[dict]:
+    exclude_nb: bool,
+) -> tuple[list[dict], int]:
     """
     將 dominant_pos 合併進 candidates，並套用 POS 白名單過濾。
+
+    exclude_nb=True 時，從有效白名單中移除 'Nb'（專有名詞），
+    用於過濾品牌名。
+
     dominant_pos 為 None 的 token 保留（可能是 tfidf 收錄但 comment_tokens
     未索引的邊緣 token，讓人工審閱時決定）。
+
+    回傳：(filtered_candidates, removed_count)
     """
+    # 依參數決定本次有效的 POS 白名單
+    effective_whitelist = POS_WHITELIST - {"Nb"} if exclude_nb else POS_WHITELIST
+
     result = []
+    removed = 0
     for cand in candidates:
         token = cand["token"]
         pos = pos_map.get(token)
@@ -363,10 +437,47 @@ def apply_pos_filter(
         # pos 為 None：保留，標記為未知詞性，人工審閱
         if pos is None:
             result.append(cand)
-        elif pos in POS_WHITELIST:
+        elif pos in effective_whitelist:
             result.append(cand)
-        # else：詞性不在白名單，過濾掉
-    return result
+        else:
+            removed += 1
+    return result, removed
+
+
+# ─────────────────────────────────────────────────────────────
+# Step E2：Blacklist 過濾（Python 端，在 POS 過濾之後執行）
+# ─────────────────────────────────────────────────────────────
+def apply_blacklist_filter(
+    candidates: list[dict],
+    label_name: str,
+    use_generic: bool,
+    use_label: bool,
+) -> tuple[list[dict], int, int]:
+    """
+    依序套用通用 blacklist 和 label-specific blacklist。
+
+    回傳：(filtered_candidates, generic_removed_count, label_removed_count)
+    """
+    generic_removed = 0
+    label_removed = 0
+    result = []
+
+    label_bl = LABEL_BLACKLIST.get(label_name, frozenset())
+
+    for cand in candidates:
+        token = cand["token"]
+
+        if use_generic and token in GENERIC_BLACKLIST:
+            generic_removed += 1
+            continue
+
+        if use_label and token in label_bl:
+            label_removed += 1
+            continue
+
+        result.append(cand)
+
+    return result, generic_removed, label_removed
 
 
 # ─────────────────────────────────────────────────────────────
@@ -444,19 +555,24 @@ def run_mining(
     min_df: int,
     top_k: int,
     use_pos_filter: bool,
+    exclude_nb: bool,
+    use_generic_blacklist: bool,
+    use_label_blacklist: bool,
     dry_run: bool,
 ) -> None:
 
     logger.info("=" * 60)
-    logger.info(f"run_id          : {run_id}")
-    logger.info(f"label_name      : {label_name}")
-    logger.info(f"mining_run      : {mining_run}")
-    logger.info(f"corpus_id       : {corpus_id}")
-    logger.info(f"pipeline_version: {pipeline_version}")
-    logger.info(f"min_tf / min_df : {min_tf} / {min_df}")
-    logger.info(f"top_k           : {top_k}")
-    logger.info(f"pos_filter      : {use_pos_filter}")
-    logger.info(f"mode            : {'DRY-RUN' if dry_run else 'WRITE'}")
+    logger.info(f"run_id           : {run_id}")
+    logger.info(f"label_name       : {label_name}")
+    logger.info(f"mining_run       : {mining_run}")
+    logger.info(f"corpus_id        : {corpus_id}")
+    logger.info(f"pipeline_version : {pipeline_version}")
+    logger.info(f"min_tf / min_df  : {min_tf} / {min_df}")
+    logger.info(f"top_k            : {top_k}")
+    logger.info(f"pos_filter       : {use_pos_filter}  exclude_nb={exclude_nb}")
+    logger.info(f"generic_blacklist: {use_generic_blacklist}")
+    logger.info(f"label_blacklist  : {use_label_blacklist}")
+    logger.info(f"mode             : {'DRY-RUN' if dry_run else 'WRITE'}")
     logger.info("=" * 60)
 
     conn = get_conn()
@@ -517,21 +633,50 @@ def run_mining(
             )
             logger.info(f"  找到詞性資訊的 token 數量: {len(pos_map)}")
 
-            # ── POS 過濾（Python 端）────────────────────────────
-            filtered_candidates = apply_pos_filter(raw_candidates, pos_map, use_pos_filter)
-            logger.info(
-                f"POS 過濾後剩餘: {len(filtered_candidates)} 筆"
-                + (f"（共 {len(raw_candidates) - len(filtered_candidates)} 筆被 POS 過濾）"
-                   if use_pos_filter else "（POS 過濾已關閉）")
-            )
+            # ── 過濾統計追蹤 ────────────────────────────────────
+            after_sql = len(raw_candidates)
 
-            # 取最終 top_k
-            final_candidates = filtered_candidates[:top_k]
-            logger.info(f"最終候選詞數量（top_{top_k}）: {len(final_candidates)}")
+            # ── 層次 1：POS 過濾 ────────────────────────────────
+            after_pos_list, pos_removed = apply_pos_filter(
+                raw_candidates, pos_map, use_pos_filter, exclude_nb
+            )
+            after_pos = len(after_pos_list)
+
+            # ── 層次 2 & 3：Blacklist 過濾 ──────────────────────
+            final_candidates_full, generic_removed, label_removed = apply_blacklist_filter(
+                after_pos_list,
+                label_name=label_name,
+                use_generic=use_generic_blacklist,
+                use_label=use_label_blacklist,
+            )
+            after_blacklist = len(final_candidates_full)
+
+            # ── 取最終 top_k ─────────────────────────────────────
+            final_candidates = final_candidates_full[:top_k]
+
+            # ── 過濾統計報告 ─────────────────────────────────────
+            logger.info("─" * 50)
+            logger.info("過濾統計：")
+            logger.info(f"  SQL 基礎過濾後       : {after_sql:4d} 筆")
+            if use_pos_filter:
+                nb_note = "（含 Nb 排除）" if exclude_nb else ""
+                logger.info(f"  POS 過濾後           : {after_pos:4d} 筆  (-{pos_removed}{nb_note})")
+            else:
+                logger.info(f"  POS 過濾             : 已關閉")
+            if use_generic_blacklist:
+                logger.info(f"  通用 blacklist 後    : {after_pos - generic_removed:4d} 筆  (-{generic_removed})")
+            else:
+                logger.info(f"  通用 blacklist       : 已關閉")
+            if use_label_blacklist:
+                logger.info(f"  Label blacklist 後   : {after_blacklist:4d} 筆  (-{label_removed})")
+            else:
+                logger.info(f"  Label blacklist      : 已關閉")
+            logger.info(f"  最終 top_{top_k:<4d}       : {len(final_candidates):4d} 筆")
+            logger.info("─" * 50)
 
             if dry_run:
                 logger.info("[DRY-RUN] 不寫入資料庫。")
-                logger.info(f"[DRY-RUN] Top 20 候選詞預覽：")
+                logger.info("[DRY-RUN] Top 20 候選詞預覽：")
                 for i, c in enumerate(final_candidates[:20], 1):
                     pos_tag = pos_map.get(c["token"], "?")
                     logger.info(
@@ -642,6 +787,26 @@ def parse_args():
         help="停用 POS 白名單過濾（納入所有詞性，方便 debug）",
     )
     parser.add_argument(
+        "--exclude-nb",
+        action="store_true",
+        default=False,
+        help="從 POS 白名單中移除 Nb（專有名詞），用於過濾品牌名",
+    )
+    parser.add_argument(
+        "--no-generic-blacklist",
+        dest="use_generic_blacklist",
+        action="store_false",
+        default=True,
+        help="關閉通用 blacklist 過濾（預設開啟）",
+    )
+    parser.add_argument(
+        "--no-label-blacklist",
+        dest="use_label_blacklist",
+        action="store_false",
+        default=True,
+        help="關閉 label-specific blacklist 過濾（預設開啟）",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=True,
@@ -681,6 +846,9 @@ def main():
         min_df=args.min_df,
         top_k=args.top_k,
         use_pos_filter=not args.no_pos_filter,
+        exclude_nb=args.exclude_nb,
+        use_generic_blacklist=args.use_generic_blacklist,
+        use_label_blacklist=args.use_label_blacklist,
         dry_run=args.dry_run,
     )
 
