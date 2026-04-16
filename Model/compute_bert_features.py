@@ -24,19 +24,31 @@ def init_db(conn):
     conn.commit()
     print("Initialized database table.")
 
-def fetch_pending_comments(conn, limit=1000):
-    """Fetch comments that haven't been processed yet."""
-    sql = """
-    SELECT pc.comment_id, pc.comment_text
-    FROM product_comments pc
-    LEFT JOIN comment_semantic_scores css ON pc.comment_id = css.comment_id
-    WHERE css.comment_id IS NULL
-      AND pc.comment_text IS NOT NULL
-      AND length(pc.comment_text) > 5
-    LIMIT %s
-    """
+def fetch_pending_comments(conn, limit=1000, recompute=False, offset=0):
+    """Fetch comments that haven't been processed yet (or all, if recompute=True)."""
+    if recompute:
+        sql = """
+        SELECT comment_id, comment_text
+        FROM product_comments
+        WHERE comment_text IS NOT NULL
+          AND length(comment_text) > 5
+        ORDER BY comment_id
+        LIMIT %s OFFSET %s
+        """
+        params = (limit, offset)
+    else:
+        sql = """
+        SELECT pc.comment_id, pc.comment_text
+        FROM product_comments pc
+        LEFT JOIN comment_semantic_scores css ON pc.comment_id = css.comment_id
+        WHERE css.comment_id IS NULL
+          AND pc.comment_text IS NOT NULL
+          AND length(pc.comment_text) > 5
+        LIMIT %s
+        """
+        params = (limit,)
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute(sql, (limit,))
+        cur.execute(sql, params)
         return cur.fetchall()
 
 def save_scores(conn, results):
@@ -74,6 +86,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=16, help="Inference batch size")
     parser.add_argument("--model", type=str, default="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli", help="Hugging Face model name")
     parser.add_argument("--device", type=int, default=-1, help="Device ID (-1 for CPU, 0 for GPU)")
+    parser.add_argument("--recompute", action="store_true", default=False,
+                        help="重新計算所有評論（包含已有分數的），用於更新 hypothesis 後的全量重跑")
     args = parser.parse_args()
 
     # Check for GPU
@@ -104,34 +118,40 @@ def main():
     
     # Mapping for inference (if we want to use Chinese labels)
     label_map = {
-        "High_Arousal": "讚讚、開心、超棒、超讚、無敵、神奇、驚人、驚喜、高興、好棒、厲害、驚豔、驚訝、不可思議、救星、福音、出乎意料、意外",
-        "High_Novelty": "新奇、初次體驗、相見恨晚、特別、神奇、不同、新品、意外、驚人、難得、發現、開箱、驚訝、出乎意料",
-        "High_Repurchase_Intent": "回購意願高、忠實粉絲、長期、固定、喜歡、值得、首選、接受度、長輩、舒服、舒適、信心、可靠、最愛、忠實、好用、囤貨",
-        "Negative_Complaint": "憤怒、失望、反推、失望、客服、傻眼、過期、嚴重、可惜、問題、對不起、退貨",
-        "Advertisement": "業配、廣告、湊字數、廣告、代言、代言人、官網、網頁、網評、風評、吸引人、老牌子、觀感"
+        "High_Arousal": "讚讚、開心、超棒、超讚、無敵、驚喜、高興、好棒、厲害、驚豔、不可思議、救星、福音",
+        "High_Novelty": "新奇、初次體驗、相見恨晚、特別、不同、難得、發現、開箱、神奇",
+        "High_Repurchase_Intent": "回購意願高、忠實粉絲、長期、固定、喜歡、值得、首選、舒服、舒適、信心、可靠、最愛、忠實、囤貨",
+        "Negative_Complaint": "憤怒、失望、反推、客服、傻眼、過期、嚴重、可惜、問題、退貨",
+        "Advertisement": "業配、廣告、湊字數、代言、代言人、官網、網頁、網評、風評、老牌子",
     }
+
     labels_zh = list(label_map.values())
     
     conn = get_db_connection()
     try:
         init_db(conn)
-        
+
+        if args.recompute:
+            print("--recompute 模式：將重新計算所有評論的分數（ON CONFLICT DO UPDATE）")
+
+        processed_total = 0
+        offset = 0
         while True:
-            comments = fetch_pending_comments(conn, limit=args.limit)
+            comments = fetch_pending_comments(conn, limit=args.limit, recompute=args.recompute, offset=offset)
             if not comments:
                 print("No pending comments found.")
                 break
-            
+
             print(f"Processing {len(comments)} comments...")
-            
+
             # Prepare batch
             texts = [c['comment_text'] for c in comments]
             ids = [c['comment_id'] for c in comments]
-            
+
             # Inference
             # We use the Chinese labels for inference
             outputs = classifier(texts, labels_zh, batch_size=args.batch_size, multi_label=True)
-            
+
             results = []
             for i, output in enumerate(outputs):
                 # Map back to English keys
@@ -142,15 +162,17 @@ def main():
                         if zh_val == label:
                             scores[eng_key] = score
                             break
-                
+
                 results.append({
                     'comment_id': ids[i],
                     'scores': scores
                 })
-            
+
             save_scores(conn, results)
-            print(f"Saved {len(results)} scores.")
-            
+            processed_total += len(results)
+            offset += len(comments)
+            print(f"Saved {len(results)} scores. (累計 {processed_total} 筆)")
+
             # If we fetched fewer than limit, we are done
             if len(comments) < args.limit:
                 break
