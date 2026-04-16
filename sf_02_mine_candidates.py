@@ -117,10 +117,16 @@ GENERIC_BLACKLIST = frozenset({
     "評價", "評論", "評分", "留言", "回饋",
     # 過泛的體驗詞（在幾乎所有 label 的高信心集合都高頻，無鑑別力）
     "效果", "感受", "功效", "功能", "作用",
+    # 過泛的效果描述詞（全語料正向評論都有，無法區分 label）
+    "有感", "有效",
     # 過泛的認知詞（單獨出現時無法對應特定語意）
     "知道", "覺得", "認為", "感覺",
+    # meta-commentary / 聽說類（描述資訊來源，不是語意信號）
+    "聽說", "觀察",
     # 過泛的期待詞
     "希望", "期待", "期望",
+    # 過泛的正向評語（幾乎所有正向評論都有，無鑑別力）
+    "不錯",
     # 人際關係詞（使用情境描述，不是語意信號）
     "朋友", "家人", "老婆", "老公", "媽媽", "爸爸",
     # 口感/味道（對大部分語意 label 無鑑別力，保健品、食品語料常見）
@@ -144,8 +150,10 @@ LABEL_BLACKLIST: dict[str, frozenset] = {
         # 健康食品成分名（高頻但非語意信號）
         "葉黃素", "益生菌", "膠原", "蛋白", "生醫",
         "魚油", "膠囊", "維生素", "維他命", "乳酸菌",
-        # 食材/食品名
-        "鮭魚", "鱈魚",
+        # 成分/製造相關詞（保健品/食品語料 corpus artifact）
+        "成份", "成效", "日期",
+        # 食材/食品口味描述（保健品/零食語料 corpus artifact，不是新奇語意）
+        "鮭魚", "鱈魚", "甜甜", "酸酸", "繽紛",
         # 品牌名（首次購買某品牌 → 語意是「首次」，但詞本身是品牌名）
         # 品牌名優先用 --exclude-nb 擋，此處補漏網的 Na 標記品牌
         "天王", "中江", "歐可",
@@ -165,8 +173,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,   # 強制覆蓋 config.database 的 basicConfig 設定，避免 format 被吃掉
 )
 logger = logging.getLogger(__name__)
+# 抑制 config.database 的 INFO log（連線設定每次都印，太雜）
+logging.getLogger("config.database").setLevel(logging.WARNING)
 
 
 # ─────────────────────────────────────────────────────────────
