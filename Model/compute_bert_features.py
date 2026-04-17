@@ -118,11 +118,11 @@ def main():
     
     # Mapping for inference (if we want to use Chinese labels)
     label_map = {
-        "High_Arousal": "讚讚、開心、超棒、超讚、無敵、驚喜、高興、好棒、厲害、驚豔、不可思議、救星、福音",
-        "High_Novelty": "新奇、初次體驗、相見恨晚、特別、不同、難得、發現、開箱、神奇",
-        "High_Repurchase_Intent": "回購意願高、忠實粉絲、長期、固定、喜歡、值得、首選、舒服、舒適、信心、可靠、最愛、忠實、囤貨",
+        "High_Arousal": "驚豔、驚喜、不可思議、太神了、厲害、無敵、震撼、驚人",
+        "High_Novelty": "新奇、初次體驗、相見恨晚、特別、不同、難得、發現、神奇",
+        "High_Repurchase_Intent": "回購、長期、固定、首選、忠實、囤貨、會再買、一直買",
         "Negative_Complaint": "憤怒、失望、反推、客服、傻眼、過期、嚴重、可惜、問題、退貨",
-        "Advertisement": "業配、廣告、湊字數、代言、代言人、官網、網頁、網評、風評、老牌子",
+        "Advertisement": "代言、代言人、官網、網頁、網評、風評、老牌子",
     }
 
     labels_zh = list(label_map.values())
